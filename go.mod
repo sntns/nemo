@@ -9,6 +9,7 @@ require (
 	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/distribution/reference v0.6.1-0.20240718132515-8c942b0459df
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
+	github.com/moby/moby/api v1.56.1
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1
 	github.com/stretchr/testify v1.12.1
@@ -24,6 +25,7 @@ require (
 	github.com/hashicorp/go-multierror v1.1.1 // indirect
 	github.com/mattn/go-shellwords v1.0.12 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
+	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/qri-io/jsonpointer v0.1.1 // indirect
 	github.com/qri-io/jsonschema v0.2.2-0.20210831022256-780655b2ba0e // indirect
