@@ -8,6 +8,7 @@ require (
 	github.com/cnabio/cnab-to-oci v0.6.2
 	github.com/compose-spec/compose-go/v2 v2.16.1
 	github.com/distribution/reference v0.6.1-0.20240718132515-8c942b0459df
+	github.com/go-ozzo/ozzo-validation/v4 v4.3.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.1
 	github.com/stretchr/testify v1.12.1
