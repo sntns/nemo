@@ -1,0 +1,158 @@
+{
+  "name": "foo",
+  "version": "1.0.0",
+  "schemaVersion": "1.2.0",
+  "invocationImages": [
+    {
+      "imageType": "docker",
+      "image": "technosophos/helloworld:0.1.0"
+    }
+  ],
+  "images": {
+    "image1": {
+      "description": "image1",
+      "image": "urn:image1uri",
+      "refs": [
+        {
+          "path": "image1path",
+          "field": "image.1.field"
+        }
+      ]
+    },
+    "image2": {
+      "name": "image2",
+      "uri": "urn:image2uri",
+      "refs": [
+        {
+          "path": "image2path",
+          "field": "image.2.field"
+        }
+      ]
+    }
+  },
+  "credentials": {
+    "foo": {
+      "path": "/cnab/app/credentials/foo"
+    },
+    "bar": {
+      "env": "ebar"
+    },
+    "quux": {
+      "path": "/cnab/app/credentials/quux",
+      "env": "equux"
+    }
+  },
+  "requiredExtensions": [
+    "io.cnab.dependencies",
+    "io.cnab.docker"
+  ],
+  "custom": {
+    "com.example.duffle-bag": {
+      "icon": "https://example.com/icon.png",
+      "iconType": "PNG"
+    },
+    "com.example.backup-preferences": {
+      "enabled": true,
+      "frequency": "daily"
+    },
+    "io.cnab.dependencies": {
+      "requires": {
+        "storage": {
+          "bundle": "somecloud/blob-storage"
+        },
+        "mysql": {
+          "bundle": "somecloud/mysql",
+          "version": {
+            "prereleases": true,
+            "ranges": [
+              "5.7.x"
+            ]
+          }
+        }
+      },
+      "sequence": [
+        "storage",
+        "mysql"
+      ]
+    },
+    "io.cnab.docker": {},
+    "io.nemo.compose": {
+      "schemaVersion": "1.0.0",
+      "compose": [
+        {
+          "name": "compose.yaml",
+          "config": {
+            "services": {
+              "web": {
+                "image": "nginx:1.27-alpine"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "definitions": {
+    "complexThing": {
+      "type": "object",
+      "properties": {
+        "host": {
+          "default": "localhost",
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 10
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 8000
+        }
+      },
+      "required": [
+        "port"
+      ]
+    },
+    "mysql_connstr": {
+      "type": "string"
+    },
+    "tfstate": {
+      "contentEncoding": "base64",
+      "type": "string"
+    }
+  },
+  "parameters": {
+    "serverConfig": {
+      "definition": "complexThing",
+      "destination": {
+        "path": "/cnab/is/go"
+      }
+    },
+    "tfstate": {
+      "applyTo": [
+        "upgrade",
+        "uninstall"
+      ],
+      "definition": "tfstate",
+      "required": true,
+      "destination": {
+        "path": "/cnab/app/tfstate"
+      }
+    },
+    "mysql_connstr": {
+      "definition": "mysql_connstr",
+      "destination": {
+        "env": "MYSQL_CONNSTR"
+      }
+    }
+  },
+  "outputs": {
+    "tfstate": {
+      "applyTo": [
+        "install",
+        "upgrade",
+        "uninstall"
+      ],
+      "definition": "tfstate",
+      "path": "/cnab/app/outputs/tfstate"
+    }
+  }
+}

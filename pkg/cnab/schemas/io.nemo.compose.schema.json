@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.sntns.io/nemo/io.nemo.compose.schema.json",
+  "title": "Nemo Compose extension, version 1",
+  "description": "Content of custom[\"io.nemo.compose\"] in a CNAB bundle.json. Minors of 1.x only add optional properties; a breaking change goes to compose.v2.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "compose"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this schema the content was written for.",
+      "type": "string",
+      "pattern": "^1\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "compose": {
+      "description": "Compose documents merged in order into one project, like several -f flags.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/composeDocument"
+      }
+    }
+  },
+  "$defs": {
+    "composeDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "config"
+      ],
+      "properties": {
+        "name": {
+          "description": "File name shown in errors. Defaults to compose-<index>.yaml.",
+          "type": "string",
+          "minLength": 1
+        },
+        "config": {
+          "description": "A compose document as parsed YAML. compose-go checks its content when the project loads.",
+          "type": "object"
+        }
+      }
+    }
+  }
+}
