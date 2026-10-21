@@ -1,0 +1,10 @@
+# Binaries go build writes at the root
+/nemo
+/gill
+
+# Built by make and goreleaser
+/bin/
+/dist/
+
+# Bundles built from the examples
+/examples/*/build/
