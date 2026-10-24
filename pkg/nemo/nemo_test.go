@@ -1,0 +1,265 @@
+package nemo
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cnabio/cnab-go/bundle"
+	"github.com/cnabio/cnab-go/bundle/definition"
+	"github.com/cnabio/cnab-go/valuesource"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/sntns/nemo/pkg/cnab"
+	"github.com/sntns/nemo/pkg/runtime"
+	"github.com/sntns/nemo/pkg/storage"
+	"github.com/sntns/nemo/pkg/storage/file"
+	"github.com/sntns/nemo/pkg/target"
+)
+
+// fakeRuntime records the requests and answers with a successful run.
+type fakeRuntime struct {
+	requests []runtime.Request
+}
+
+func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (runtime.Run, error) {
+	fake.requests = append(fake.requests, request)
+	parameters := map[string]any{}
+	for name, value := range request.Parameters {
+		parameters[name] = value
+	}
+	parameters[cnab.ParameterOrchestrator] = request.Target.Orchestrator
+	created := cnab.Claim{
+		ID:           cnab.NewULID(),
+		Revision:     cnab.NewULID(),
+		Installation: request.Stack + "/" + request.Bundle.Name,
+		Action:       request.Action,
+		Bundle:       request.Bundle.Bundle,
+		Parameters:   parameters,
+		// As the runtime records them.
+		BundleReference: request.Source,
+		Custom:          request.Custom,
+	}
+	result, err := created.NewResult(cnab.StatusSucceeded)
+	return runtime.Run{Claim: created, Result: result}, err
+}
+
+func (fake *fakeRuntime) last() runtime.Request { return fake.requests[len(fake.requests)-1] }
+
+func setup(t *testing.T) (*Nemo, *fakeRuntime, string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	home := filepath.Join(directory, "home")
+	token := filepath.Join(directory, "token")
+	require.NoError(t, os.WriteFile(token, []byte("s3cret"), 0o600))
+
+	sensitive := true
+	cnabBundle := bundle.Bundle{
+		SchemaVersion: "1.2.0",
+		Name:          "nginx",
+		Version:       "1.0.0",
+		InvocationImages: []bundle.InvocationImage{
+			{BaseImage: bundle.BaseImage{ImageType: "docker", Image: "gill:dev"}},
+		},
+		RequiredExtensions: []string{cnab.DockerExtension.Key},
+		Custom:             map[string]any{cnab.DockerExtension.Key: map[string]any{}},
+		Definitions: definition.Definitions{
+			"string":   &definition.Schema{Type: "string"},
+			"password": &definition.Schema{Type: "string", WriteOnly: &sensitive},
+		},
+		Parameters: map[string]bundle.Parameter{
+			cnab.ParameterOrchestrator: {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "NEMO_ORCHESTRATOR"}},
+			"region":                   {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "REGION"}},
+			"password":                 {Definition: "password", Destination: &bundle.Location{EnvironmentVariable: "PASSWORD"}},
+		},
+		Credentials: map[string]bundle.Credential{
+			"token": {Location: bundle.Location{Path: "/cnab/app/credentials/token"}, Required: true, ApplyTo: []string{"install", "upgrade"}},
+		},
+	}
+	data, err := json.Marshal(cnabBundle)
+	require.NoError(t, err)
+	bundleFile := filepath.Join(directory, "bundle.json")
+	require.NoError(t, os.WriteFile(bundleFile, data, 0o600))
+
+	fake := &fakeRuntime{}
+	return &Nemo{store: file.New(home), execute: fake.execute, load: load}, fake, bundleFile, token
+}
+
+// demoNginx names the installation of the test bundle in the stack demo.
+var demoNginx = storage.InstallationSpec{Name: "nginx", Stack: "demo"}
+
+func TestInstallThenUninstallWithNothingElse(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, token := setup(t)
+	ctx := context.Background()
+
+	_, err := nemo.Install(ctx, ActionRequest{
+		InstallationSpec: storage.InstallationSpec{
+			Stack:       "demo",
+			Parameters:  map[string]string{"region": "eu5", "password": "hunter2"},
+			Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}},
+		},
+		BundleSource: bundleFile,
+		Target:       target.Target{Orchestrator: target.Swarm},
+	})
+	require.NoError(t, err)
+
+	run, err := nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.NoError(t, err)
+	assert.Equal(t, "uninstall", run.Action)
+
+	request := fake.last()
+	assert.Equal(t, "nginx", request.Bundle.Name, "the stored bundle")
+	assert.Equal(t, target.Swarm, request.Target.Orchestrator, "the stored target")
+	assert.Equal(t, map[string]string{"region": "eu5"}, request.Parameters, "stored parameters, the sensitive one not")
+	assert.Empty(t, request.Credentials, "token does not apply to uninstall")
+}
+
+func TestUpgradeOverridesParameters(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, token := setup(t)
+	ctx := context.Background()
+
+	_, err := nemo.Install(ctx, ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Parameters: map[string]string{"region": "eu5"}, Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           target.Target{Orchestrator: target.Compose},
+	})
+	require.NoError(t, err)
+
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Name: "nginx", Stack: "demo", Parameters: map[string]string{"region": "eu6"}}})
+	require.NoError(t, err)
+	request := fake.last()
+	assert.Equal(t, map[string]string{"region": "eu6"}, request.Parameters)
+	assert.Equal(t, valuesource.Set{"token": "s3cret"}, request.Credentials, "read again from the stored source")
+}
+
+func TestRefusals(t *testing.T) {
+	t.Parallel()
+	nemo, _, bundleFile, token := setup(t)
+	ctx := context.Background()
+
+	_, err := nemo.Upgrade(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.EqualError(t, err, "demo/nginx is not installed")
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.EqualError(t, err, "nemo does not know demo/nginx: give its bundle's source and its target")
+	_, err = nemo.Install(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.EqualError(t, err, "install needs the bundle's source")
+
+	_, err = nemo.Install(ctx, ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           target.Target{Orchestrator: target.Compose},
+	})
+	require.NoError(t, err)
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: demoNginx, Target: target.Target{Orchestrator: target.Swarm}})
+	require.EqualError(t, err, "demo/nginx is deployed with compose: uninstall it with compose first")
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: demoNginx, Target: target.Target{Configuration: target.Configuration{Host: "ssh://vm2"}}})
+	require.EqualError(t, err, "demo/nginx is deployed on the environment's Docker: uninstall it there first")
+
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.NoError(t, err)
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.EqualError(t, err, "demo/nginx is not installed")
+}
+
+func TestNothingSecretIsWritten(t *testing.T) {
+	t.Parallel()
+	nemo, _, bundleFile, token := setup(t)
+
+	run, err := nemo.Install(context.Background(), ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Parameters: map[string]string{"password": "hunter2"}, Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           target.Target{Orchestrator: target.Compose},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, Redacted, run.Parameters["password"], "nor returned")
+
+	home := filepath.Join(filepath.Dir(bundleFile), "home")
+	err = filepath.Walk(home, func(path string, info os.FileInfo, err error) error {
+		require.NoError(t, err)
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, secret := range []string{"hunter2", "s3cret"} {
+			assert.False(t, strings.Contains(string(data), secret), "%s holds %s", path, secret)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestInstallationStatus(t *testing.T) {
+	t.Parallel()
+	nemo, _, bundleFile, token := setup(t)
+	ctx := context.Background()
+	install := ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           target.Target{Orchestrator: target.Compose},
+	}
+
+	_, err := nemo.Install(ctx, install)
+	require.NoError(t, err)
+	installation, err := nemo.store.GetInstallation(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	assert.True(t, installation.IsInstalled())
+	assert.Equal(t, cnab.ActionInstall, installation.Status.Action)
+	assert.Equal(t, bundleFile, installation.Status.BundleReference)
+	assert.Equal(t, "1.0.0", installation.Status.BundleVersion)
+	assert.Equal(t, storage.BundleReference{File: bundleFile}, installation.Bundle, "the reference of the bundle.json it was given")
+	firstInstall := *installation.Status.Installed
+
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.NoError(t, err)
+	installation, err = nemo.store.GetInstallation(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	assert.False(t, installation.IsInstalled())
+	assert.NotNil(t, installation.Status.Uninstalled)
+
+	_, err = nemo.Install(ctx, install)
+	require.NoError(t, err)
+	installation, err = nemo.store.GetInstallation(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	assert.True(t, installation.IsInstalled(), "installed again")
+	assert.True(t, installation.Status.Installed.After(firstInstall))
+
+	runs, err := nemo.store.ListRuns(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	assert.Len(t, runs, 3, "one CNAB claim per action")
+}
+
+func TestReferenceOf(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, storage.BundleReference{Repository: "ghcr.io/sntns/whoami", Version: "1.0.0"}, referenceOf("docker://ghcr.io/sntns/whoami:1.0.0", "1.0.0"), "as Porter writes it")
+	assert.Equal(t, storage.BundleReference{Version: "1.0.0"}, referenceOf("oci:.artifacts/whoami.oci", "1.0.0"), "a layout is no repository")
+	assert.Equal(t, storage.BundleReference{File: "whoami/bundle.json"}, referenceOf("whoami/bundle.json", "1.0.0"))
+}
+
+func TestRuns(t *testing.T) {
+	t.Parallel()
+	nemo, _, bundleFile, token := setup(t)
+	ctx := context.Background()
+	_, err := nemo.Install(ctx, ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           target.Target{Orchestrator: target.Compose},
+	})
+	require.NoError(t, err)
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.NoError(t, err)
+
+	runs, err := nemo.Runs(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	require.Len(t, runs, 2)
+	assert.Equal(t, []string{"install", "uninstall"}, []string{runs[0].Action, runs[1].Action}, "oldest first")
+	assert.Equal(t, "succeeded", runs[0].Status, "with its result")
+	assert.Equal(t, []string{"token"}, runs[0].Credentials, "the credentials by name, from the claim's custom data")
+	assert.Equal(t, target.Compose, runs[0].Target.Orchestrator)
+}
