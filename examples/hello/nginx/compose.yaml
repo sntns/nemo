@@ -1,0 +1,31 @@
+x-nemo-bundle:
+  name: nginx
+  version: 1.0.0
+  description: A web page that says where it runs, and serves a secret token
+
+services:
+  web:
+    image: nginx:1.27-alpine
+    ports: ["8080:80"]
+    configs:
+      - source: page
+        target: /usr/share/nginx/html/index.html
+    secrets:
+      - source: token
+        target: /usr/share/nginx/html/token
+    volumes:
+      - cache:/var/cache/nginx
+
+configs:
+  page:
+    content: |
+      hello from nemo in ${REGION}
+
+secrets:
+  token:
+    environment: TOKEN
+
+volumes:
+  cache:
+    x-nemo-volume:
+      type: data

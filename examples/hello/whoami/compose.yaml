@@ -1,0 +1,15 @@
+x-nemo-bundle:
+  name: whoami
+  version: 1.0.0
+  description: A service that answers who it is, and needs nginx to run first
+  dependencies:
+    requires:
+      nginx:
+        bundle: registry.example.com/hello/nginx
+        version:
+          ranges: [">=1.0.0"]
+
+services:
+  whoami:
+    image: traefik/whoami:v1.10
+    ports: ["8081:80"]

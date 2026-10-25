@@ -1,0 +1,23 @@
+name: hello
+
+target:
+  orchestrator: compose
+  configuration:
+    images: load
+    volumes:
+      data:
+        driver: local
+
+remote: "oci:build/{{ .Component }}.oci"
+
+parameters:
+  region: eu5
+
+installations:
+  - name: nginx
+    bundle: { version: 1.0.0 }
+    credentials:
+      - name: token
+        source: { env: HELLO_TOKEN }
+  - name: whoami
+    bundle: { version: 1.0.0 }
