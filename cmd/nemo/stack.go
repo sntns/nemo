@@ -55,7 +55,7 @@ func optional(arguments []string) string {
 // stackCommand groups the commands on the stacks nemo keeps.
 func stackCommand() *cobra.Command {
 	command := &cobra.Command{Use: "stack", Short: "Keep stacks: their manifests, in nemo's home, and the current one"}
-	command.AddCommand(stackImport(), stackUse(), stackList(), stackInspect(), stackSet(), stackRemove())
+	command.AddCommand(stackCreate(), stackImport(), stackUse(), stackList(), stackInspect(), stackSet(), stackRemove())
 	return command
 }
 
