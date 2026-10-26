@@ -1,10 +1,13 @@
 package compose
 
 import (
+	"context"
+	"fmt"
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -12,6 +15,7 @@ import (
 	"github.com/sntns/nemo/pkg/installer"
 	"github.com/sntns/nemo/pkg/installer/compose/convert"
 	"github.com/sntns/nemo/pkg/labels"
+	"github.com/sntns/nemo/pkg/progress"
 )
 
 // service returns a service of that name, changed by edit: most fields of a
@@ -112,4 +116,53 @@ func TestOwnership_volumeKeptBySwarm(t *testing.T) {
 	assert.True(t, docker.Owns(keptBySwarm, installer.VolumeOwner(installation)), "compose mounts the data swarm kept")
 	assert.False(t, docker.Owns(keptBySwarm, stackLabels(installation)), "but not a network swarm created")
 	assert.False(t, docker.Owns(keptBySwarm, installer.VolumeOwner(installer.Installation{Stack: "staging"})), "nor another stack's data")
+}
+
+// engine is a Docker that has no container yet, and on which every
+// container created runs at once.
+type engine struct {
+	client.APIClient
+	created int
+}
+
+func (engine *engine) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
+	return client.ContainerListResult{}, nil
+}
+
+func (engine *engine) ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
+	engine.created++
+	return client.ContainerCreateResult{ID: fmt.Sprintf("%064d", engine.created)}, nil
+}
+
+func (engine *engine) ContainerStart(ctx context.Context, id string, options client.ContainerStartOptions) (client.ContainerStartResult, error) {
+	return client.ContainerStartResult{}, nil
+}
+
+func (engine *engine) ContainerInspect(ctx context.Context, id string, options client.ContainerInspectOptions) (client.ContainerInspectResult, error) {
+	state := &container.State{Status: container.StateRunning, Running: true}
+	return client.ContainerInspectResult{Container: container.InspectResponse{State: state}}, nil
+}
+
+func TestCreateServices_progress(t *testing.T) {
+	t.Parallel()
+	orchestrator := &Orchestrator{docker: docker.New(&engine{})}
+	spec := &convert.ServiceSpec{
+		Name:     "web",
+		Replicas: 2,
+		Config:   &container.Config{Labels: map[string]string{labels.Stack: "demo", labels.Bundle: "nginx"}},
+		Wait:     convert.Healthy,
+	}
+	project := &installer.Project{Levels: [][]string{{"web"}}}
+	var events []string
+	sink := progress.SinkFunc(func(event progress.Event) {
+		events = append(events, fmt.Sprintf("%s %d/%d %s", event.State, event.Current, event.Total, event.Message))
+	})
+
+	require.NoError(t, orchestrator.createServices(context.Background(), project, &projectSpecs{services: map[string]*convert.ServiceSpec{"web": spec}}, sink))
+	assert.Equal(t, []string{
+		"working 0/2 creating",
+		"working 0/2 checking health",
+		"working 1/2 checking health",
+		"done 2/2 healthy",
+	}, events, "each container counted once it reached the state its dependants wait for")
 }

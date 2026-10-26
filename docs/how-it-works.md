@@ -95,7 +95,7 @@ What runs on the target is described by the labels on the target. What was asked
 
 ## Progress
 
-gill reports what it does as events: images loading, networks and volumes created, each service's tasks starting, verifying, running. nemo renders them:
+gill reports what it does as events: images loading, networks and volumes created, and each service's containers (Compose) or tasks (Swarm) counted as they start, pass their health check or are verified to stay up, and run. nemo renders them:
 
 - **in a terminal**, as a view redrawn in place: a line per installation, the services of the one at work unfolded;
 - **elsewhere**, a CI log for instance, as one line per change;

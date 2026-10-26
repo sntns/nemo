@@ -372,8 +372,9 @@ func (live *live) render() []string {
 }
 
 // services are the lines of the services of an installation, with their
-// tasks as Swarm counts them: green once ready, cyan while Swarm verifies
-// that they stay up, yellow on their way, red on failure.
+// tasks or containers counted: green once ready, cyan while Swarm verifies
+// that they stay up or Compose checks their health, yellow on their way,
+// red on failure.
 func (live *live) services(view *installationView) []string {
 	width := 0
 	for _, name := range view.services {
@@ -388,7 +389,7 @@ func (live *live) services(view *installationView) []string {
 			icon, style = "✔", green
 		case task.State == progress.Error:
 			icon, style = "✖", red
-		case task.Message == "verifying":
+		case task.Message == "verifying" || task.Message == "checking health":
 			style = cyan
 		}
 		tasks := ""

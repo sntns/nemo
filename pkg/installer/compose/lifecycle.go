@@ -29,6 +29,17 @@ func (orchestrator *Orchestrator) wait(ctx context.Context, id string, wanted co
 	}
 }
 
+// waiting is what a service does until its containers reach the condition.
+func waiting(condition convert.Condition) string {
+	switch condition {
+	case convert.Healthy:
+		return "checking health"
+	case convert.Completed:
+		return "running to completion"
+	}
+	return "starting"
+}
+
 // reached tells whether a container is in the wanted state, and fails when it never will be.
 func reached(state *container.State, wanted convert.Condition) (bool, error) {
 	switch {
