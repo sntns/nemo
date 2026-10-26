@@ -273,7 +273,7 @@ func stackRemove() *cobra.Command {
 				return err
 			}
 			for _, installation := range installations {
-				if installation.IsInstalled() {
+				if !installation.IsUninstalled() {
 					return fmt.Errorf("stack %s has installations: nemo down --stack %s first", name, name)
 				}
 			}

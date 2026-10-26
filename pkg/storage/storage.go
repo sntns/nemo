@@ -128,6 +128,13 @@ func (installation Installation) IsInstalled() bool {
 	return installation.Status.Installed != nil && installation.Status.Uninstalled == nil
 }
 
+// IsUninstalled reports whether the installation's last action removed it:
+// an uninstall that succeeded. An installation whose install failed is not:
+// it may have left part of its bundle on the target.
+func (installation Installation) IsUninstalled() bool {
+	return installation.Status.Action == cnab.ActionUninstall && installation.Status.ResultStatus == cnab.StatusSucceeded
+}
+
 // Store keeps installations and their runs.
 type Store interface {
 	// GetInstallation returns the installation of the bundle in the stack,

@@ -148,7 +148,7 @@ nemo down --purge         # and its volumes
 nemo down --stack shop
 ```
 
-`nemo down` uninstalls every installation of the stack, dependants first. It reads what to remove from nemo's records, so it needs no manifest and no bundle at hand. Volumes stay unless `--purge`: the next `nemo up` finds the data where it was.
+`nemo down` uninstalls every installation of the stack, dependants first. It reads what to remove from nemo's records, so it needs no manifest and no bundle at hand. An installation whose install failed is uninstalled too, since it may have left part of its services on the target. Volumes stay unless `--purge`: the next `nemo up` finds the data where it was.
 
 ## Reading what happened
 
