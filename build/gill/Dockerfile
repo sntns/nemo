@@ -2,7 +2,7 @@
 
 # gill, the invocation image of every nemo bundle. Built from the root of the
 # repository: docker build -f build/gill/Dockerfile .
-FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27 AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
