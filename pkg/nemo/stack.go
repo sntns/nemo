@@ -89,7 +89,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 		return result, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
 	}
 
-	installed, err := nemo.installed(ctx, request.Stack.Name)
+	present, err := nemo.present(ctx, request.Stack.Name)
 	if err != nil {
 		return result, err
 	}
@@ -104,7 +104,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 		for _, bundle := range slices.Backward(ordered) {
 			if slices.Contains(wanted, bundle.Name) {
 				for _, name := range stack.DependencyNames(bundle) {
-					if _, ok := installed[name]; !ok {
+					if !present[name].IsInstalled() {
 						wanted = append(wanted, name)
 					}
 				}
@@ -115,7 +115,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 	events := progressOf(request.Progress)
 	for _, bundle := range ordered {
 		action := cnab.ActionInstall
-		if _, ok := installed[bundle.Name]; ok {
+		if present[bundle.Name].IsInstalled() {
 			action = cnab.ActionUpgrade
 		}
 		events.Emit(progress.Event{Installation: request.Stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: action})
@@ -130,7 +130,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 		}
 		maps.Copy(parameters, stacked.spec.Parameters)
 		action := cnab.ActionInstall
-		if _, ok := installed[bundle.Name]; ok {
+		if present[bundle.Name].IsInstalled() {
 			action = cnab.ActionUpgrade
 		}
 		spec := stacked.spec
@@ -149,13 +149,13 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 		if err != nil {
 			return result, fmt.Errorf("%s/%s: %w", request.Stack.Name, bundle.Name, err)
 		}
-		delete(installed, bundle.Name)
+		delete(present, bundle.Name)
 	}
 	if len(request.Only) > 0 {
 		return result, nil
 	}
 
-	runs, err := nemo.uninstall(ctx, request.Stack.Name, installed, request.Purge, request.Progress)
+	runs, err := nemo.uninstall(ctx, request.Stack.Name, present, request.Purge, request.Progress)
 	result.Runs = append(result.Runs, runs...)
 	return result, err
 }
@@ -205,30 +205,32 @@ type stackEntry struct {
 // Down uninstalls every installation of the stack, dependants first. It
 // needs nothing but the stack's name: the rest comes from the installations.
 func (nemo *Nemo) Down(ctx context.Context, request DownRequest) (StackResult, error) {
-	installed, err := nemo.installed(ctx, request.Name)
+	present, err := nemo.present(ctx, request.Name)
 	if err != nil {
 		return StackResult{}, err
 	}
-	if len(installed) == 0 {
+	if len(present) == 0 {
 		return StackResult{}, fmt.Errorf("stack %s has no installations", request.Name)
 	}
-	runs, err := nemo.uninstall(ctx, request.Name, installed, request.Purge, request.Progress)
+	runs, err := nemo.uninstall(ctx, request.Name, present, request.Purge, request.Progress)
 	return StackResult{Runs: runs}, err
 }
 
-// installed returns the installations of the stack that are not uninstalled, by bundle name.
-func (nemo *Nemo) installed(ctx context.Context, stackName string) (map[string]storage.Installation, error) {
+// present returns the installations of the stack that may have something on
+// the target, by bundle name: all but the uninstalled, those whose install
+// failed included.
+func (nemo *Nemo) present(ctx context.Context, stackName string) (map[string]storage.Installation, error) {
 	installations, err := nemo.store.ListInstallations(ctx, stackName)
 	if err != nil {
 		return nil, err
 	}
-	installed := map[string]storage.Installation{}
+	present := map[string]storage.Installation{}
 	for _, installation := range installations {
-		if installation.IsInstalled() {
-			installed[installation.Name] = installation
+		if !installation.IsUninstalled() {
+			present[installation.Name] = installation
 		}
 	}
-	return installed, nil
+	return present, nil
 }
 
 // uninstall uninstalls the installations, dependants first.

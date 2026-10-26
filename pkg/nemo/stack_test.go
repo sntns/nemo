@@ -361,3 +361,38 @@ func TestUpOnly(t *testing.T) {
 	}
 	assert.Equal(t, []string{"install database", "install web"}, actions, "web alone, with its database not installed")
 }
+
+func TestDown_failedInstall(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	directory := filepath.Dir(bundleFile)
+	demo := stack.Stack{
+		Name:   "demo",
+		Target: target.Target{Orchestrator: target.Compose},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: writeBundle(t, directory, "web", "database")}},
+			{Name: "database", Bundle: storage.BundleReference{File: writeBundle(t, directory, "database")}},
+		},
+	}
+	run := func(action func() error) []string {
+		before := len(fake.requests)
+		_ = action()
+		var done []string
+		for _, request := range fake.requests[before:] {
+			done = append(done, request.Action+" "+request.Bundle.Name)
+		}
+		return done
+	}
+	up := func() error { _, err := nemo.Up(context.Background(), UpRequest{Stack: demo}); return err }
+	down := func() error { _, err := nemo.Down(context.Background(), DownRequest{Name: "demo"}); return err }
+
+	fake.failing = map[string]bool{"web": true}
+	assert.Equal(t, []string{"install database", "install web"}, run(up))
+	fake.failing = nil
+	assert.Equal(t, []string{"uninstall web", "uninstall database"}, run(down), "an install that failed may have left services: down removes them too")
+
+	fake.failing = map[string]bool{"web": true}
+	assert.Equal(t, []string{"install database", "install web"}, run(up))
+	fake.failing = nil
+	assert.Equal(t, []string{"upgrade database", "install web"}, run(up), "and up installs it again, rather than upgrading it")
+}

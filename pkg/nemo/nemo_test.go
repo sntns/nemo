@@ -24,6 +24,8 @@ import (
 // fakeRuntime records the requests and answers with a successful run.
 type fakeRuntime struct {
 	requests []runtime.Request
+	// failing names the bundles whose actions fail, as the installer's would.
+	failing map[string]bool
 }
 
 func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (runtime.Run, error) {
@@ -43,6 +45,13 @@ func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (
 		// As the runtime records them.
 		BundleReference: request.Source,
 		Custom:          request.Custom,
+	}
+	if fake.failing[request.Bundle.Name] {
+		result, err := created.NewResult(cnab.StatusFailed)
+		if err != nil {
+			return runtime.Run{}, err
+		}
+		return runtime.Run{Claim: created, Result: result}, &runtime.FailedError{Action: request.Action, Installation: created.Installation, Cause: "the installer exited with code 1"}
 	}
 	result, err := created.NewResult(cnab.StatusSucceeded)
 	return runtime.Run{Claim: created, Result: result}, err
