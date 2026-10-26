@@ -64,6 +64,7 @@ func root() *cobra.Command {
 		}
 	}
 	command.AddCommand(reference())
+	completeStackFlags(command)
 	return command
 }
 
@@ -395,5 +396,16 @@ func reference() *cobra.Command {
 			root.DisableAutoGenTag = true
 			return doc.GenMarkdownTree(root, arguments[0])
 		},
+	}
+}
+
+// completeStackFlags completes --stack with the names of the stacks, on every
+// command that has it.
+func completeStackFlags(command *cobra.Command) {
+	if command.Flags().Lookup("stack") != nil {
+		_ = command.RegisterFlagCompletionFunc("stack", completeStacks)
+	}
+	for _, child := range command.Commands() {
+		completeStackFlags(child)
 	}
 }

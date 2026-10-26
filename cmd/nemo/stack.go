@@ -44,6 +44,17 @@ func chosenStack(path, name string) (stack.Stack, error) {
 	return store.Load(name)
 }
 
+// completeStacks completes the first argument with the names of the stacks
+// nemo keeps.
+func completeStacks(_ *cobra.Command, arguments []string, _ string) ([]cobra.Completion, cobra.ShellCompDirective) {
+	store, _, err := stackStore()
+	if len(arguments) > 0 || err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	names, _ := store.List()
+	return names, cobra.ShellCompDirectiveNoFileComp
+}
+
 // optional is the argument given, or nothing.
 func optional(arguments []string) string {
 	if len(arguments) == 0 {
@@ -110,9 +121,10 @@ func stackImport() *cobra.Command {
 
 func stackUse() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use NAME",
-		Short: "Make a stack the current one, which up and down act on",
-		Args:  cobra.ExactArgs(1),
+		Use:               "use NAME",
+		ValidArgsFunction: completeStacks,
+		Short:             "Make a stack the current one, which up and down act on",
+		Args:              cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			store, _, err := stackStore()
 			if err != nil {
@@ -153,9 +165,10 @@ func stackList() *cobra.Command {
 func stackInspect() *cobra.Command {
 	var format string
 	command := &cobra.Command{
-		Use:   "inspect [NAME]",
-		Short: "Print the manifest of a stack, the current one by default",
-		Args:  cobra.MaximumNArgs(1),
+		Use:               "inspect [NAME]",
+		ValidArgsFunction: completeStacks,
+		Short:             "Print the manifest of a stack, the current one by default",
+		Args:              cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			inspected, err := chosenStack("", optional(arguments))
 			if err != nil {
@@ -191,10 +204,11 @@ func stackSet() *cobra.Command {
 		credentialFlags []string
 	)
 	command := &cobra.Command{
-		Use:     "set [NAME]",
-		Short:   "Change a stack, the current one by default",
-		Example: `  nemo stack set --remote "oci:$PWD/build/bundles/{{ .Component }}.oci" --param region=eu6 --credential token=env:TOKEN`,
-		Args:    cobra.MaximumNArgs(1),
+		Use:               "set [NAME]",
+		ValidArgsFunction: completeStacks,
+		Short:             "Change a stack, the current one by default",
+		Example:           `  nemo stack set --remote "oci:$PWD/build/bundles/{{ .Component }}.oci" --param region=eu6 --credential token=env:TOKEN`,
+		Args:              cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			changed, err := chosenStack("", optional(arguments))
 			if err != nil {
@@ -244,9 +258,10 @@ func stackSet() *cobra.Command {
 
 func stackRemove() *cobra.Command {
 	return &cobra.Command{
-		Use:   "remove NAME",
-		Short: "Forget a stack, its manifest and its installations' records, once nothing of it is installed",
-		Args:  cobra.ExactArgs(1),
+		Use:               "remove NAME",
+		ValidArgsFunction: completeStacks,
+		Short:             "Forget a stack, its manifest and its installations' records, once nothing of it is installed",
+		Args:              cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			name := arguments[0]
 			store, root, err := stackStore()
