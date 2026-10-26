@@ -1,0 +1,52 @@
+# nemo's binaries, archives and Homebrew formula, for each release that
+# release-please creates. gill's image is built by the release workflow.
+version: 2
+
+project_name: nemo
+
+builds:
+  - id: nemo
+    main: ./cmd/nemo
+    binary: nemo
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.stamped={{ .Version }}
+
+archives:
+  - id: nemo
+    name_template: "nemo_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# release-please writes the notes and creates the release; the archives are
+# added to it.
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing
+
+brews:
+  - name: nemo
+    repository:
+      owner: sntns
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: https://github.com/sntns/nemo
+    description: Deploy applications of containers onto Docker, with Compose or Swarm, as CNAB bundles
+    license: Apache-2.0
+    test: |
+      system "#{bin}/nemo", "--version"
