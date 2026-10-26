@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/sntns/nemo/actions/workflows/ci.yml"><img src="https://github.com/sntns/nemo/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/sntns/nemo/actions/workflows/release.yml"><img src="https://github.com/sntns/nemo/actions/workflows/release.yml/badge.svg" alt="Release"></a>
   <a href="https://github.com/sntns/nemo/releases/latest"><img src="https://img.shields.io/github/v/release/sntns/nemo?sort=semver" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
   <a href="https://cnab.io"><img src="https://img.shields.io/badge/CNAB-1.2-ff7a1a" alt="CNAB 1.2"></a>

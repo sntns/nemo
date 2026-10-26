@@ -61,7 +61,7 @@ export NEMO_INSTALLER=oci:$PWD/bin/gill.oci
 
 To try a change end to end, build and deploy the [examples](examples/README.md) on your local Docker.
 
-CI runs the linter, the tests, a build of every released platform, a check that `docs/reference/cli` is up to date, and a build of gill's image, on every push and pull request. A pull request won't be merged if any of them fails.
+`main` takes changes through pull requests only. CI runs the linter, the tests, a build of every released platform, a check that `docs/reference/cli` is up to date, and a build of gill's image on every pull request, and a pull request can't be merged until they pass. Once merged, `main` runs the release workflow alone.
 
 ## Commit messages
 

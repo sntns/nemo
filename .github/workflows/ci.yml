@@ -1,8 +1,8 @@
 name: CI
 
+# Every change reaches main through a pull request that passed it: main
+# runs the release workflow alone.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
