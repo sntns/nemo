@@ -22,6 +22,9 @@ jobs:
       - id: release
         uses: googleapis/release-please-action@v5
         with:
+          # A token of a person, so that the release pull request runs the CI:
+          # GitHub runs no workflow for what GitHub Actions' own token creates.
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
           config-file: .github/release-please-config.json
           manifest-file: .github/.release-please-manifest.json
 
