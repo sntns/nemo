@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/sntns/nemo/compare/v0.1.0...v0.1.1) (2026-10-26)
+
+
+### Build System
+
+* let a release that failed half way run again ([b15abdf](https://github.com/sntns/nemo/commit/b15abdf419b6ebdd274eb800a92340c046e0eaf5))
+
 ## 0.1.0 (2026-10-26)
 
 
