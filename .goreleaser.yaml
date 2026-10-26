@@ -37,6 +37,8 @@ changelog:
 
 release:
   mode: keep-existing
+  # A release whose job failed half way can be run again.
+  replace_existing_artifacts: true
 
 # shortcut: brews is deprecated in GoReleaser v2 in favour of casks, which do
 # not install on Linux; move to homebrew_casks when they do.
