@@ -95,7 +95,7 @@ A relative `path` is made absolute, from the manifest's directory when imported,
 
 ## Keeping stacks
 
-nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), and one of them is the **current stack**: commands act on it unless given `--stack NAME`.
+nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), and one of them is the **current stack**: commands act on it unless given `--stack NAME`. With shell completion (`nemo completion --help`), Tab completes the names of the stacks, of their installations and of their services.
 
 | Command | Does |
 |---|---|
