@@ -147,7 +147,7 @@ func (orchestrator *Orchestrator) createNetworks(ctx context.Context, networks [
 
 // createServices converges the containers of each level of services, then
 // waits until they reach the state their dependants ask for before the next
-// level starts.
+// level starts, counting the containers of each service that reached it.
 func (orchestrator *Orchestrator) createServices(ctx context.Context, project *installer.Project, specs *projectSpecs, events progress.Sink) error {
 	for _, level := range project.Levels {
 		group, groupContext := errgroup.WithContext(ctx)
@@ -159,13 +159,15 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 				return fmt.Errorf("service %s: %w", spec.Name, err)
 			}
 			group.Go(func() error {
-				for _, id := range ids {
+				total := int64(len(ids))
+				for ready, id := range ids {
+					events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Working, Current: int64(ready), Total: total, Message: waiting(spec.Wait)})
 					if err := orchestrator.wait(groupContext, id, spec.Wait); err != nil {
 						events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Error, Message: err.Error()})
 						return fmt.Errorf("service %s: %w", spec.Name, err)
 					}
 				}
-				events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Done, Message: string(spec.Wait)})
+				events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Done, Current: total, Total: total, Message: string(spec.Wait)})
 				return nil
 			})
 		}
@@ -189,7 +191,7 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, revision st
 		byNumber[number] = summary
 	}
 
-	events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Working, Message: "starting"})
+	events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Working, Total: int64(spec.Replicas), Message: "creating"})
 	var ids []string
 	for number := 1; number <= spec.Replicas; number++ {
 		summary, found := byNumber[number]
