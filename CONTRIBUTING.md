@@ -76,7 +76,10 @@ Releases are made by [release-please](https://github.com/googleapis/release-plea
 
 A released `nemo` builds bundles with the gill of its own version, so both are always published together.
 
-The release workflow needs the `HOMEBREW_TAP_TOKEN` secret, a token that can push to `sntns/homebrew-tap`.
+The release workflow needs two secrets:
+
+- `RELEASE_TOKEN`, a token that can push to this repository and open pull requests in it. release-please opens the release pull request with it, so that the pull request runs the CI and can be merged: GitHub runs no workflow for what the Actions' own token creates.
+- `HOMEBREW_TAP_TOKEN`, a token that can push to `sntns/homebrew-tap`.
 
 ## Submitting a pull request
 
