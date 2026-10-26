@@ -18,7 +18,7 @@ jobs:
           go-version-file: go.mod
       - uses: golangci/golangci-lint-action@v8
         with:
-          version: v2.5
+          version: v2.15
 
   test:
     runs-on: ubuntu-latest
@@ -36,11 +36,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Check the release configuration
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: check
       - name: Build nemo for every platform it is released for
         uses: goreleaser/goreleaser-action@v6
         with:

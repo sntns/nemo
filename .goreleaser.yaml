@@ -38,6 +38,8 @@ changelog:
 release:
   mode: keep-existing
 
+# shortcut: brews is deprecated in GoReleaser v2 in favour of casks, which do
+# not install on Linux; move to homebrew_casks when they do.
 brews:
   - name: nemo
     repository:
