@@ -143,7 +143,7 @@ func (installer Installer) Validate() error {
 	return validation.ValidateStruct(&installer,
 		validation.Field(&installer.Driver, validation.In(DriverDocker, DriverKubernetes).Error("must be docker or kubernetes")),
 		validation.Field(&installer.Kubernetes, validation.When(installer.DriverName() == DriverKubernetes,
-			validation.Required.Error("the kubernetes driver needs them"),
+			validation.NotNil.Error("the kubernetes driver needs them"),
 		).Else(validation.Nil.Error("only the kubernetes driver takes them"))),
 	)
 }
