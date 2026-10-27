@@ -156,6 +156,13 @@ func (b *bench) logEventsOnFailure() {
 	}
 }
 
+// eventsOf returns what the installer reported so far.
+func (b *bench) eventsOf() []progress.Event {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.events)
+}
+
 // messages returns what the installer reported about one item.
 func (b *bench) messages(item string) []string {
 	b.mu.Lock()
