@@ -50,6 +50,8 @@ func Run(ctx context.Context, operation Operation, orchestrators Orchestrators, 
 			Events: events,
 		}
 		return orchestrator.Install(ctx, project, opts)
+	case cnab.ActionValidate:
+		return orchestrator.Validate(project)
 	case cnab.ActionUninstall:
 		opts := UninstallOptions{
 			Events:        events,

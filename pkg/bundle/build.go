@@ -99,6 +99,7 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 		Definitions:        nemoDefinitions(),
 		Parameters:         nemoParameters(),
 		Credentials:        map[string]bundle.Credential{},
+		Actions:            map[string]bundle.Action{cnab.ActionValidate: {Stateless: true, Description: "Check the bundle against the target, and change nothing"}},
 		RequiredExtensions: []string{cnab.DockerExtension.Key},
 	}
 	compose := cnab.Compose{SchemaVersion: cnab.ComposeSchemaVersion, Documents: documents}

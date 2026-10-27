@@ -72,6 +72,9 @@ type ActionRequest struct {
 	Installer target.Installer
 	// Progress receives the events of the action.
 	Progress progress.Sink
+	// Validate runs the bundle's validate action instead, with what the
+	// action would run with: nothing changes, and nothing is recorded.
+	Validate bool
 }
 
 // Run is the record of an action: what was asked, and what came of it.
@@ -127,7 +130,11 @@ func (nemo *Nemo) act(ctx context.Context, action string, request ActionRequest,
 		return Run{}, err
 	}
 	events := progress.About(progressOf(request.Progress), plan.stack+"/"+plan.bundle.Name)
-	events.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: action})
+	working, done := progress.Event{Group: progress.Installation, State: progress.Working, Message: action}, progress.Event{Group: progress.Installation, State: progress.Done, Message: action}
+	if request.Validate {
+		working.Message, done.State = cnab.ActionValidate, progress.Pending
+	}
+	events.Emit(working)
 	run, err := nemo.run(ctx, action, request, plan, events)
 	if err != nil {
 		// The installation and its action are the event's already: a failed run says only how it ended.
@@ -138,7 +145,7 @@ func (nemo *Nemo) act(ctx context.Context, action string, request ActionRequest,
 		}
 		events.Emit(progress.Event{Group: progress.Installation, State: progress.Error, Message: message})
 	} else {
-		events.Emit(progress.Event{Group: progress.Installation, State: progress.Done, Message: action})
+		events.Emit(done)
 	}
 	return run, err
 }
@@ -153,6 +160,12 @@ func progressOf(sink progress.Sink) progress.Sink {
 
 // run runs the planned action and records it.
 func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest, plan actionPlan, events progress.Sink) (Run, error) {
+	if request.Validate {
+		if _, declared := plan.bundle.Actions[cnab.ActionValidate]; !declared {
+			return Run{}, fmt.Errorf("the bundle %s has no %s action: it was built by an older nemo", plan.bundle.Name, cnab.ActionValidate)
+		}
+		action = cnab.ActionValidate
+	}
 	values, err := credentials.Resolve(plan.credentials, plan.bundle, action)
 	if err != nil {
 		return Run{}, err
@@ -170,7 +183,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Custom:      storage.RunCustom{Target: plan.target, Installer: plan.installer, Credentials: plan.credentials, RelocationMap: plan.relocation},
 		Progress:    events,
 	})
-	if run.Claim.ID == "" {
+	if run.Claim.ID == "" || request.Validate {
 		return Run{}, err
 	}
 

@@ -64,6 +64,10 @@ Every nemo bundle declares these parameters, through which nemo tells gill about
 | `nemo-volumes` | `NEMO_VOLUMES` | The target's volume types, as JSON. nemo sets it from the target. |
 | `nemo-registry-auth` | `NEMO_REGISTRY_AUTH` | The credentials of the registries the images come from, as JSON. Sensitive. nemo sets it from `docker login`. |
 
+## Actions
+
+Besides CNAB's `install`, `upgrade` and `uninstall`, every nemo bundle declares the custom action `validate`. It is stateless: it needs no installation, records nothing, and changes nothing. On it, gill loads the compose project as an install would, and runs the orchestrator's checks against the target. `nemo up` runs it on every bundle of the stack before it installs the first; any CNAB runtime can run it too, `porter invoke --action validate` for one.
+
 ## Extensions
 
 | Extension | Required | Read by |

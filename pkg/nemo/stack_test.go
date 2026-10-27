@@ -396,3 +396,52 @@ func TestDown_failedInstall(t *testing.T) {
 	fake.failing = nil
 	assert.Equal(t, []string{"upgrade database", "install web"}, run(up), "and up installs it again, rather than upgrading it")
 }
+
+// checkable declares the validate action in the bundle written at path, as the bundles nemo builds do.
+func checkable(t *testing.T, path string) string {
+	t.Helper()
+	extended, err := cnab.LoadBundle(path)
+	require.NoError(t, err)
+	extended.Actions = map[string]bundle.Action{cnab.ActionValidate: {Stateless: true}}
+	data, err := json.Marshal(extended.Bundle)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
+func TestUpChecksEveryBundleFirst(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	directory := filepath.Dir(bundleFile)
+	demo := stack.Stack{
+		Name:   "demo",
+		Target: target.Target{Orchestrator: target.Compose},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: checkable(t, writeBundle(t, directory, "web", "database"))}},
+			{Name: "database", Bundle: storage.BundleReference{File: checkable(t, writeBundle(t, directory, "database"))}},
+			{Name: "cache", Bundle: storage.BundleReference{File: writeBundle(t, directory, "cache")}},
+		},
+	}
+	actions := func(from int) []string {
+		var result []string
+		for _, request := range fake.requests[from:] {
+			result = append(result, request.Action+" "+request.Bundle.Name)
+		}
+		return result
+	}
+
+	fake.failing = map[string]bool{"web": true}
+	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.Error(t, err)
+	assert.Equal(t, []string{"validate database", "validate web"}, actions(0), "a check that fails stops up before it installs anything")
+	installations, _ := nemo.Installations(ctx, "demo")
+	assert.Empty(t, installations, "a check records nothing")
+
+	fake.failing = nil
+	result, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"validate database", "validate web"}, actions(2)[:2])
+	assert.ElementsMatch(t, []string{"install cache", "install database", "install web"}, actions(4), "a bundle that can't be checked is installed in its turn")
+	assert.Len(t, result.Runs, 3)
+}

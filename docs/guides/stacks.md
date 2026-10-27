@@ -120,8 +120,9 @@ nemo up -f deploy/shop.yaml       # a manifest nemo does not keep
 `nemo up` brings the target to the manifest:
 
 1. It locates every bundle, resolves the dependencies the stack does not list, and checks that every dependency's version satisfies the ranges its dependant accepts. Nothing is touched if one does not.
-2. It installs the installations that are not installed, and upgrades those that are, dependencies first. An upgrade with nothing changed is quick: gill keeps every container or service whose specification did not change.
-3. It uninstalls the installations of the stack that the manifest no longer lists, dependants first. Their volumes stay, unless `--purge`.
+2. It runs every bundle's `validate` action, with what it would install it with: gill checks the bundle against the target, such as a service name too long for Swarm or a compose option Swarm does not support, and changes nothing. Nothing is touched if one fails. A bundle built by nemo 0.2 or before can't be checked: it is checked when its turn comes, as it installs.
+3. It installs the installations that are not installed, and upgrades those that are, dependencies first. An upgrade with nothing changed is quick: gill keeps every container or service whose specification did not change.
+4. It uninstalls the installations of the stack that the manifest no longer lists, dependants first. Their volumes stay, unless `--purge`.
 
 It stops at the first action that fails. Fix the cause, and run `nemo up` again: it starts over from the manifest.
 
