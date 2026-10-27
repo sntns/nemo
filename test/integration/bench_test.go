@@ -14,6 +14,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -57,6 +59,13 @@ type bench struct {
 	// variable of its name, as a runtime delivers a bundle's credentials.
 	credentials map[string]string
 
+	// timeout is the nemo-timeout of the actions.
+	timeout time.Duration
+
+	// after runs once the stack is uninstalled: it removes what a test
+	// created outside of the stack.
+	after []func()
+
 	mu      sync.Mutex
 	events  []progress.Event
 	project string
@@ -69,15 +78,17 @@ func newBench(t *testing.T, orchestrator string) *bench {
 	require.NoError(t, err)
 	suffix := make([]byte, 3)
 	_, _ = rand.Read(suffix)
-	b := &bench{t: t, orchestrator: orchestrator, stack: "it" + hex.EncodeToString(suffix), api: connection.API()}
+	b := &bench{t: t, orchestrator: orchestrator, stack: "it" + hex.EncodeToString(suffix), api: connection.API(), timeout: timeout}
 	t.Cleanup(func() {
 		defer connection.Close()
 		defer b.logEventsOnFailure()
-		if b.project == "" {
-			return
+		if b.project != "" {
+			assert.NoError(t, b.run(cnab.ActionUninstall, b.project, true), "uninstall")
+			b.assertNothingLeft()
 		}
-		assert.NoError(t, b.run(cnab.ActionUninstall, b.project, true), "uninstall")
-		b.assertNothingLeft()
+		for _, after := range slices.Backward(b.after) {
+			after()
+		}
 	})
 	return b
 }
@@ -88,13 +99,17 @@ func (b *bench) upgrade(project string) error { return b.run(cnab.ActionUpgrade,
 
 func (b *bench) uninstall(purge bool) error { return b.run(cnab.ActionUninstall, b.project, purge) }
 
+func (b *bench) validate(project string) error { return b.run(cnab.ActionValidate, project, false) }
+
 // run performs the action on the compose project, as gill does for a bundle
 // that carries it.
 func (b *bench) run(action, project string, purge bool) error {
 	b.t.Helper()
 	var config map[string]any
 	require.NoError(b.t, yaml.Unmarshal([]byte(project), &config), "the compose project of the test")
-	b.project = project
+	if action != cnab.ActionValidate {
+		b.project = project
+	}
 	credentials := map[string]bundle.Credential{}
 	for name := range b.credentials {
 		credentials[name] = bundle.Credential{Location: bundle.Location{EnvironmentVariable: name}}
@@ -114,12 +129,12 @@ func (b *bench) run(action, project string, purge bool) error {
 		},
 		Parameters: map[string]any{
 			cnab.ParameterOrchestrator: b.orchestrator,
-			cnab.ParameterTimeout:      timeout.String(),
+			cnab.ParameterTimeout:      b.timeout.String(),
 			cnab.ParameterPurge:        purge,
 		},
 		Credentials: b.credentials,
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(b.t.Context()), timeout+time.Minute)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(b.t.Context()), b.timeout+time.Minute)
 	defer cancel()
 	return installer.Run(ctx, operation, orchestrators, progress.SinkFunc(b.record))
 }
@@ -211,6 +226,50 @@ func (b *bench) assertNothingLeft() {
 	if assert.NoError(b.t, err) {
 		assert.Empty(b.t, secrets.Items, "secrets")
 	}
+}
+
+// externalNetwork creates a network outside of the stack, as an operator
+// does for a stack to join it, and returns its name.
+func (b *bench) externalNetwork() string {
+	b.t.Helper()
+	name := b.stack + "-outside"
+	driver := "bridge"
+	if b.orchestrator == nemoswarm.Name {
+		driver = "overlay"
+	}
+	_, err := b.api.NetworkCreate(b.t.Context(), name, client.NetworkCreateOptions{Driver: driver, Attachable: true})
+	require.NoError(b.t, err)
+	b.after = append(b.after, func() {
+		assert.EventuallyWithT(b.t, func(c *assert.CollectT) {
+			_, err := b.api.NetworkRemove(context.WithoutCancel(b.t.Context()), name, client.NetworkRemoveOptions{})
+			assert.NoError(c, err)
+		}, 30*time.Second, time.Second)
+	})
+	return name
+}
+
+// externalVolume creates a volume outside of the stack and returns its name.
+func (b *bench) externalVolume() string {
+	b.t.Helper()
+	name := b.stack + "-outside"
+	_, err := b.api.VolumeCreate(b.t.Context(), client.VolumeCreateOptions{Name: name})
+	require.NoError(b.t, err)
+	b.after = append(b.after, func() {
+		assert.EventuallyWithT(b.t, func(c *assert.CollectT) {
+			_, err := b.api.VolumeRemove(context.WithoutCancel(b.t.Context()), name, client.VolumeRemoveOptions{})
+			assert.NoError(c, err)
+		}, 30*time.Second, time.Second)
+	})
+	return name
+}
+
+// freePort returns a TCP port nothing listens on now.
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
 }
 
 // failsUntil is a shell command that exits 1 until the given time, then
