@@ -86,6 +86,27 @@ func TestConvergence(t *testing.T) {
 			replicated(0, 1),
 			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), {Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning}}, false, "",
 		},
+		"restarting a failed task, not scheduled yet": {
+			replicated(0, 1),
+			[]swarm.Task{
+				{Slot: 1, NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
+				{Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateNew}, DesiredState: swarm.TaskStateReady},
+			}, false, "",
+		},
+		"restarting a failed task on another node": {
+			replicated(0, 1),
+			[]swarm.Task{
+				{Slot: 1, NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
+				{Slot: 1, NodeID: "other", Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning},
+			}, false, "",
+		},
+		"restart policy gave up on one node of a global service": {
+			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}}}},
+			[]swarm.Task{
+				{NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
+				{NodeID: "other", Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, DesiredState: swarm.TaskStateRunning},
+			}, false, "stopped restarting",
+		},
 		"failed task not restarted yet": {
 			replicated(0, 1),
 			[]swarm.Task{failedTask(1, swarm.TaskStateRunning)}, false, "",

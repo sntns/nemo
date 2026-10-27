@@ -114,7 +114,9 @@ func lastFailure(tasks []swarm.Task) (reason string, gaveUp bool) {
 			last = &tasks[i]
 		}
 		restarted := slices.ContainsFunc(tasks, func(other swarm.Task) bool {
-			return other.Slot == task.Slot && other.NodeID == task.NodeID && !slices.Contains(stopped, other.DesiredState)
+			// A replicated task's replacement has no node until it is scheduled; a global task has no slot.
+			sameSlot := other.Slot == task.Slot && (task.Slot != 0 || other.NodeID == task.NodeID)
+			return sameSlot && !slices.Contains(stopped, other.DesiredState)
 		})
 		gaveUp = gaveUp || !restarted
 	}
