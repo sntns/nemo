@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/sntns/nemo/compare/v0.2.0...v0.2.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **cli:** create the swarm on a machine with several network interfaces ([c630685](https://github.com/sntns/nemo/commit/c630685f87b22c0fa57613e1a175a16a8bb4df1e))
+
 ## [0.2.0](https://github.com/sntns/nemo/compare/v0.1.1...v0.2.0) (2026-10-26)
 
 
