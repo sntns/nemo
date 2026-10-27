@@ -29,6 +29,16 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: docker swarm init
+      - run: make integration
+
   build:
     runs-on: ubuntu-latest
     steps:
