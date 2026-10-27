@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/sntns/nemo/compare/v0.2.1...v0.3.0) (2026-10-27)
+
+
+### Features
+
+* check every bundle before up installs the first ([4ccb456](https://github.com/sntns/nemo/commit/4ccb45603658a111228c4c0e7547221935f47e82))
+* **cli:** edit stacks in an editor, and nemo stack edit ([d8742f6](https://github.com/sntns/nemo/commit/d8742f62c8edfd495591cd3fe31263c2d9c26c0e))
+* **swarm:** show why tasks restart, and stop once Swarm gives up ([4440f37](https://github.com/sntns/nemo/commit/4440f37409e19356324d9059d0f34bb3dfe2ff0f))
+
+
+### Bug Fixes
+
+* **swarm:** let Swarm restart the tasks of a paused update ([c51bbdf](https://github.com/sntns/nemo/commit/c51bbdf1290562c3fe2b3ce24c47e95bbf386a41))
+* **swarm:** show only the failed service as failed ([5a1f2eb](https://github.com/sntns/nemo/commit/5a1f2eb6d01915d5c5553f7c09017146de6eee63))
+
 ## [0.2.1](https://github.com/sntns/nemo/compare/v0.2.0...v0.2.1) (2026-10-27)
 
 
