@@ -120,7 +120,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 		}
 		events.Emit(progress.Event{Installation: request.Stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: action})
 	}
-	for _, bundle := range ordered {
+	act := func(bundle cnab.ExtendedBundle, validate bool) (Run, error) {
 		stacked := entries[bundle.Name]
 		parameters := map[string]string{}
 		for name, value := range request.Stack.Parameters {
@@ -142,12 +142,28 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error
 			Target:           request.Stack.Target,
 			Installer:        request.Stack.Installer,
 			Progress:         request.Progress,
+			Validate:         validate,
 		}, &stacked.loaded)
+		if err != nil {
+			err = fmt.Errorf("%s/%s: %w", request.Stack.Name, bundle.Name, err)
+		}
+		return run, err
+	}
+	for _, bundle := range ordered {
+		if _, declared := bundle.Actions[cnab.ActionValidate]; !declared {
+			continue
+		}
+		if _, err := act(bundle, true); err != nil {
+			return result, err
+		}
+	}
+	for _, bundle := range ordered {
+		run, err := act(bundle, false)
 		if run.Revision != "" {
 			result.Runs = append(result.Runs, run)
 		}
 		if err != nil {
-			return result, fmt.Errorf("%s/%s: %w", request.Stack.Name, bundle.Name, err)
+			return result, err
 		}
 		delete(present, bundle.Name)
 	}

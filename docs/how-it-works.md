@@ -34,6 +34,9 @@ sequenceDiagram
     participant gill
     You->>nemo: nemo up
     nemo->>nemo: read the manifest, locate the bundles,<br/>resolve dependencies, order them
+    loop each installation
+        nemo->>gill: validate: check the bundle against the target
+    end
     loop each installation, dependencies first
         nemo->>nemo: plan: parameters, credential sources,<br/>what the last run recorded
         opt images: load

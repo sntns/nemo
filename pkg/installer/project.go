@@ -92,9 +92,9 @@ func LoadProject(ctx context.Context, operation Operation) (*Project, error) {
 		return nil, fmt.Errorf("loading the compose project of %s: %w", bundle.Name, err)
 	}
 
-	// An uninstall creates nothing, so it needs no content; and the
-	// credentials that hold it may not apply to it, nor be delivered.
-	if operation.Action != cnab.ActionUninstall {
+	// Only install and upgrade create objects, so need their content; and the
+	// credentials that hold it may not apply to the other actions, nor be delivered.
+	if operation.Action == cnab.ActionInstall || operation.Action == cnab.ActionUpgrade {
 		if err := operation.resolveFileObjects(compose, variables); err != nil {
 			return nil, err
 		}

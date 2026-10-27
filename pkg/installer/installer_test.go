@@ -221,6 +221,14 @@ func TestRun(t *testing.T) {
 		assert.NotNil(t, target.orchestrators["swarm"].installed)
 	})
 
+	t.Run("validate only checks", func(t *testing.T) {
+		t.Parallel()
+		target := newTarget()
+		operation := read(t, testBundle(withParameters), map[string]string{EnvAction: cnab.ActionValidate, "NEMO_ORCHESTRATOR": "swarm"})
+		require.NoError(t, Run(context.Background(), operation, target.Orchestrators(), progress.Discard))
+		assert.Nil(t, target.orchestrators["swarm"].installed)
+	})
+
 	t.Run("never guesses the orchestrator", func(t *testing.T) {
 		t.Parallel()
 		target := newTarget()

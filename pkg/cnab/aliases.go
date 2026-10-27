@@ -15,6 +15,9 @@ const (
 	ActionUpgrade   = cnabclaims.ActionUpgrade
 	ActionUninstall = cnabclaims.ActionUninstall
 	ActionUnknown   = cnabclaims.ActionUnknown
+	// ActionValidate is the custom action of a nemo bundle that checks it
+	// against the target, and changes nothing.
+	ActionValidate = "validate"
 
 	StatusSucceeded = cnabclaims.StatusSucceeded
 	StatusCanceled  = cnabclaims.StatusCanceled
