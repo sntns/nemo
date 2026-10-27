@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -53,6 +54,7 @@ func (compose Compose) Load(ctx context.Context, name, workingDir string, enviro
 		if err := json.Unmarshal(data, &config); err != nil {
 			return nil, err
 		}
+		integers(config)
 		files[i] = types.ConfigFile{Filename: cmp.Or(document.Name, fmt.Sprintf("compose-%d.yaml", i)), Config: config}
 	}
 	return loader.LoadWithContext(ctx, types.ConfigDetails{WorkingDir: workingDir, ConfigFiles: files, Environment: environment}, func(options *loader.Options) {
@@ -62,4 +64,26 @@ func (compose Compose) Load(ctx context.Context, name, workingDir string, enviro
 			options.SkipResolveEnvironment = true
 		}
 	})
+}
+
+// integers turns back into an int each number of a JSON document that has no
+// fraction. JSON has one number type, which decodes as a float64, while the
+// compose loader takes the int a YAML document gives it: for a published
+// port, a file mode or an ulimit, it rejects a float64, or panics.
+func integers(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, element := range value {
+			value[key] = integers(element)
+		}
+	case []any:
+		for i, element := range value {
+			value[i] = integers(element)
+		}
+	case float64:
+		if value == math.Trunc(value) && math.Abs(value) <= 1<<53 {
+			return int(value)
+		}
+	}
+	return value
 }
