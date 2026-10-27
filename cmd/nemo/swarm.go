@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
+	"strings"
 
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
@@ -28,9 +31,29 @@ func ensureSwarm(ctx context.Context, deploymentTarget target.Target, output io.
 	if err != nil || info.Swarm.LocalNodeState != swarm.LocalNodeStateInactive {
 		return err
 	}
-	if _, err = engine.API().SwarmInit(ctx, client.SwarmInitOptions{ListenAddr: "0.0.0.0:2377"}); err != nil {
+	if err = initSwarm(ctx, engine.API()); err != nil {
 		return fmt.Errorf("creating a swarm on this machine's Docker: %w", err)
 	}
 	fmt.Fprintln(output, "Created a swarm on this machine's Docker")
 	return nil
+}
+
+// initSwarm creates a swarm of this Docker. On a machine with several
+// network interfaces, Docker asks which address to advertise: it is the one
+// of the default route, as 127.0.0.1 would break the published ports.
+func initSwarm(ctx context.Context, api client.APIClient) error {
+	options := client.SwarmInitOptions{ListenAddr: "0.0.0.0:2377"}
+	_, err := api.SwarmInit(ctx, options)
+	if err == nil || !strings.Contains(err.Error(), "advertise") {
+		return err
+	}
+	// No packet is sent: dialing UDP only picks the route and its address.
+	connection, dialErr := net.Dial("udp", "1.1.1.1:53")
+	if dialErr != nil {
+		return errors.Join(err, dialErr)
+	}
+	defer connection.Close()
+	options.AdvertiseAddr = connection.LocalAddr().(*net.UDPAddr).IP.String()
+	_, err = api.SwarmInit(ctx, options)
+	return err
 }
