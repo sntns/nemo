@@ -1,0 +1,8 @@
+x-nemo-bundle:
+  name: invalid
+services:
+  tool:
+    image: busybox:1.37
+    command: ["sleep", "3600"]
+    # Swarm runs no privileged service: validate refuses it.
+    privileged: true

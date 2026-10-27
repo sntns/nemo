@@ -1,0 +1,16 @@
+x-nemo-bundle:
+  name: stuck
+  dependencies:
+    requires:
+      broker:
+        bundle: bench/broker
+services:
+  stuck:
+    image: busybox:1.37
+    command: ["sh", "-c", "exit 1"]
+    networks: [mesh]
+    deploy:
+      restart_policy:
+        condition: none
+networks:
+  mesh: {}

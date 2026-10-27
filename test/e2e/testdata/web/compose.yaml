@@ -1,0 +1,26 @@
+x-nemo-bundle:
+  name: web
+  dependencies:
+    requires:
+      api:
+        bundle: bench/api
+services:
+  web:
+    image: busybox:1.37
+    command: ["sh", "-c", "echo served > /srv/index.html && exec httpd -f -p 80 -h /srv"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://api:8080/hostname"]
+      interval: 2s
+      retries: 30
+    ports:
+      - target: 80
+        published: ${WEB_PORT}
+    volumes:
+      - content:/srv
+    networks: [mesh]
+networks:
+  mesh: {}
+volumes:
+  content:
+    x-nemo-volume:
+      type: data
