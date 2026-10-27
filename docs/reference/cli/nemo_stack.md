@@ -11,7 +11,8 @@ Keep stacks: their manifests, in nemo's home, and the current one
 ### SEE ALSO
 
 * [nemo](nemo.md)	 - Deploy CNAB bundles to Docker, with Compose or Swarm
-* [nemo stack create](nemo_stack_create.md)	 - Create a stack in a form: its bundles, its target, and the parameters and credentials they declare
+* [nemo stack create](nemo_stack_create.md)	 - Create a stack in the editor: its bundles, its target, and the parameters and credentials they declare
+* [nemo stack edit](nemo_stack_edit.md)	 - Change a stack in the editor, the current one by default
 * [nemo stack import](nemo_stack_import.md)	 - Keep a stack from its manifest, YAML or JSON, and make it the current one
 * [nemo stack inspect](nemo_stack_inspect.md)	 - Print the manifest of a stack, the current one by default
 * [nemo stack list](nemo_stack_list.md)	 - List the stacks, the current one marked

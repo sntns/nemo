@@ -95,7 +95,7 @@ See [offline sites](guides/offline.md).
 
 **The situation.** You sell software that customers run on their own infrastructure. Each customer must provide their own settings and secrets: a domain, a certificate, database passwords. Your installation instructions are a long document, and support tickets start with "which version do you run?".
 
-**With nemo.** You publish versioned bundles. The customer runs `nemo stack create`: a form lists your bundles from the registry or the delivered directory, asks for their target, then for every parameter and credential the bundles declare, with your descriptions, and writes the manifest. `nemo up` installs it; `nemo installation list` tells support exactly what runs.
+**With nemo.** You publish versioned bundles. The customer runs `nemo stack create`: an editor lists your bundles from the registry or the delivered directory, asks for their target, then for every parameter and credential the bundles declare, with your descriptions, and writes the manifest. `nemo up` installs it; `nemo installation list` tells support exactly what runs.
 
 ```bash
 nemo stack create

@@ -58,7 +58,7 @@ If the site needs its own settings, a customer's domain, its certificates, give 
 nemo stack set --param domain=shop.customer.example --credential tls-key=path:/etc/shop/tls.key
 ```
 
-Or let the operator on site answer a form: `nemo stack create` lists the bundles of the directory, asks for the target and for everything they declare, and writes the manifest.
+Or let the operator on site answer the editor: `nemo stack create` lists the bundles of the directory, asks for the target and for everything they declare, and writes the manifest.
 
 ## 3. The next delivery
 

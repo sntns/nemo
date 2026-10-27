@@ -49,7 +49,7 @@ func New(opts Options) (*Nemo, error) {
 			return nil, err
 		}
 	}
-	return &Nemo{store: file.New(home), execute: runtime.Execute, load: load, tags: bundle.RegistryTags{}}, nil
+	return &Nemo{store: file.New(home), execute: runtime.Execute, load: LoadBundle, tags: bundle.RegistryTags{}}, nil
 }
 
 // ActionRequest is an action on one installation of a bundle. What it
@@ -318,8 +318,8 @@ func referenceOf(source, version string) storage.BundleReference {
 	return storage.BundleReference{Version: version}
 }
 
-// load reads a bundle from a bundle.json, or pulls it from where it was pushed.
-func load(ctx context.Context, source string) (cnab.BundleReference, error) {
+// LoadBundle reads a bundle from a bundle.json, or pulls it from where it was pushed.
+func LoadBundle(ctx context.Context, source string) (cnab.BundleReference, error) {
 	if location, err := bundle.ParseLocation(source); err == nil {
 		return bundle.Pull(ctx, location)
 	}
