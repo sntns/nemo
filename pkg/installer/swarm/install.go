@@ -3,6 +3,7 @@ package swarm
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -224,6 +225,9 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 					events.Emit(progress.Event{Group: "services", Item: name, State: progress.Working, Current: int64(running), Total: int64(desired), Message: phase})
 				}
 				if err := orchestrator.converge(groupContext, ids[i], since, report); err != nil {
+					if ctx.Err() == nil && errors.Is(err, context.Canceled) {
+						return err
+					}
 					events.Emit(progress.Event{Group: "services", Item: name, State: progress.Error, Message: err.Error()})
 					return fmt.Errorf("service %s: %w", name, err)
 				}

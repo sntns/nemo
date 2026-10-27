@@ -12,6 +12,10 @@ func task(state, desired swarm.TaskState) swarm.Task {
 	return swarm.Task{Status: swarm.TaskStatus{State: state}, DesiredState: desired}
 }
 
+func failedTask(slot int, desired swarm.TaskState) swarm.Task {
+	return swarm.Task{Slot: slot, Status: swarm.TaskStatus{State: swarm.TaskStateFailed, Err: "task: non-zero exit (1)"}, DesiredState: desired}
+}
+
 func replicated(running, desired uint64) swarm.Service {
 	return swarm.Service{
 		Spec:          swarm.ServiceSpec{Mode: swarm.ServiceMode{Replicated: &swarm.ReplicatedService{}}},
@@ -68,7 +72,32 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
 				return service
 			}(),
-			nil, false, "paused the update",
+			nil, false, "",
+		},
+		"paused, then restarted": {
+			func() swarm.Service {
+				service := replicated(1, 1)
+				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
+				return service
+			}(),
+			[]swarm.Task{running}, true, "",
+		},
+		"restarting a failed task": {
+			replicated(0, 1),
+			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), {Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning}}, false, "",
+		},
+		"failed task not restarted yet": {
+			replicated(0, 1),
+			[]swarm.Task{failedTask(1, swarm.TaskStateRunning)}, false, "",
+		},
+		"restart policy gave up": {
+			replicated(0, 1),
+			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), failedTask(1, swarm.TaskStateShutdown)}, false, "stopped restarting",
+		},
+		"restart policy gave up on one slot": {
+			replicated(1, 2),
+			[]swarm.Task{{Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, DesiredState: swarm.TaskStateRunning}, failedTask(2, swarm.TaskStateShutdown)},
+			false, "stopped restarting",
 		},
 		"replicated job done": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{TotalCompletions: &two}}}},
@@ -103,5 +132,19 @@ func TestTasksOf(t *testing.T) {
 	}
 	if _, _, phase = tasksOf(replicated(3, 3), []swarm.Task{running, running, running}); phase != "running" {
 		t.Errorf("all running: got %s", phase)
+	}
+}
+
+func TestLastFailure(t *testing.T) {
+	older, newer := failedTask(1, swarm.TaskStateShutdown), failedTask(1, swarm.TaskStateShutdown)
+	older.Status.Err = "task: non-zero exit (2)"
+	newer.CreatedAt = time.Now()
+	running := task(swarm.TaskStateRunning, swarm.TaskStateRunning)
+	running.Slot = 1
+	if reason, gaveUp := lastFailure([]swarm.Task{newer, older, running}); reason != "task: non-zero exit (1)" || gaveUp {
+		t.Errorf("got %q, %v; want the newest error, still restarting", reason, gaveUp)
+	}
+	if reason, gaveUp := lastFailure([]swarm.Task{running}); reason != "" || gaveUp {
+		t.Errorf("got %q, %v; want no failure", reason, gaveUp)
 	}
 }
