@@ -5,15 +5,12 @@
 
 ### Features
 
-* **cli:** complete the names of the stacks ([781094d](https://github.com/sntns/nemo/commit/781094d72fba8399d500259dc0bd5cb249560aac))
 * **cli:** complete the names of the stacks ([69e9923](https://github.com/sntns/nemo/commit/69e9923ab24b1b8bd0b0fa595cf96f9ca792043a))
-* **compose:** count each service's containers as they start ([6004806](https://github.com/sntns/nemo/commit/60048064dcb5c3d1ad4160047468daab86fd9fc3))
 * **compose:** count each service's containers as they start ([88198dd](https://github.com/sntns/nemo/commit/88198ddb3060ae00b162affefad463630b5d622a))
 
 
 ### Bug Fixes
 
-* **nemo:** take down the installations whose install failed ([4615a6a](https://github.com/sntns/nemo/commit/4615a6acb4161133910be06b4f7c1967cd31e784))
 * **nemo:** take down the installations whose install failed ([ba74066](https://github.com/sntns/nemo/commit/ba7406619caad4e8f13318aec5af730f3a3f3f3a))
 
 ## [0.1.1](https://github.com/sntns/nemo/compare/v0.1.0...v0.1.1) (2026-10-26)
