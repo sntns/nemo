@@ -99,15 +99,26 @@ nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), an
 
 | Command | Does |
 |---|---|
-| `nemo stack create [NAME]` | Asks for the bundles, the target, then every parameter and credential the bundles declare, in a form, and writes the manifest. |
-| `nemo stack import FILE` | Keeps a manifest written elsewhere. `--name` renames the stack, `--remote` sets where its bundles are, `--format yaml\|json` chooses how it is kept. |
+| `nemo stack create [NAME]` | Opens the editor on a new stack, and keeps it. |
+| `nemo stack edit [NAME]` | Opens the editor on a stack nemo keeps, on its review. |
+| `nemo stack import FILE` | Keeps a manifest written elsewhere. In a terminal, the editor opens on its review first; `--yes` keeps it as it is. `--name` renames the stack, `--remote` sets where its bundles are, `--format yaml\|json` chooses how it is kept. |
 | `nemo stack list` | Lists the stacks, the current one marked with `*`. |
 | `nemo stack use NAME` | Makes a stack the current one. |
 | `nemo stack inspect [NAME]` | Prints a stack's manifest. |
 | `nemo stack set [NAME]` | Changes a stack's remote, parameters (`--param NAME=VALUE`) or credentials (`--credential NAME=SOURCE:VALUE`). |
 | `nemo stack remove NAME` | Forgets a stack, its manifest and its installations' records. Only once nothing of it is installed. |
 
-`nemo stack create` lists the bundles of a directory of OCI layouts, or of a registry and namespace, and lets you pick them and their versions. It then asks for the orchestrator, how images reach the target, the format of the manifest, and the value or source of each parameter and credential the bundles declare, with the descriptions their authors wrote. The volume types the bundles use get a local volume: change them in the manifest for another driver.
+### The editor
+
+`nemo stack create`, `nemo stack edit` and `nemo stack import` share an editor that takes the terminal, one question at a time. The steps run left to right at the top, each marked complete (✓), incomplete (!) or not reached yet:
+
+1. **Bundles**: where they are, a directory of OCI layouts or a registry, then which ones and their version. A registry and namespace is given as `REGISTRY/NAMESPACE`: `registry.example.com/shop` for bundles pushed as `registry.example.com/shop/NAME:VERSION`, from which the editor writes the stack's remote, `docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}`.
+2. **Target**: the orchestrator, and how images reach the target.
+3. **Parameters**: each parameter the bundles declare, with the description and the default their authors wrote.
+4. **Credentials**: each credential, where it is read from (a file, an environment variable, a command, or its value), then the file, variable, command or value itself.
+5. **Review**: the whole stack, what is missing marked `!`. Each line opens the step that changes it; the last saves the stack.
+
+Enter goes on, shift+tab goes back, esc quits without saving. `edit` and `import` open on the review. The volume types the bundles use get a local volume: change them in the manifest for another driver.
 
 ## Bringing a stack up
 

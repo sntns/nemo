@@ -95,7 +95,7 @@ func setup(t *testing.T) (*Nemo, *fakeRuntime, string, string) {
 	require.NoError(t, os.WriteFile(bundleFile, data, 0o600))
 
 	fake := &fakeRuntime{}
-	return &Nemo{store: file.New(home), execute: fake.execute, load: load}, fake, bundleFile, token
+	return &Nemo{store: file.New(home), execute: fake.execute, load: LoadBundle}, fake, bundleFile, token
 }
 
 // demoNginx names the installation of the test bundle in the stack demo.

@@ -159,9 +159,9 @@ func TestUpResolvesAMissingDependency(t *testing.T) {
 			if !found {
 				return cnab.BundleReference{}, fmt.Errorf("%s not found", reference)
 			}
-			return load(ctx, file)
+			return LoadBundle(ctx, file)
 		}
-		return load(ctx, source)
+		return LoadBundle(ctx, source)
 	}
 	demo := stack.Stack{
 		Name:          "demo",
@@ -272,7 +272,7 @@ func TestUpResolvesADependencyFromTheRemote(t *testing.T) {
 		if !found && strings.Contains(source, ":") {
 			return cnab.BundleReference{}, fmt.Errorf("%s not found", source)
 		}
-		loaded, err := load(ctx, cmp.Or(file, source))
+		loaded, err := LoadBundle(ctx, cmp.Or(file, source))
 		if found {
 			loaded.Definition.Version = version
 		}

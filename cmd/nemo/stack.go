@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -66,17 +67,21 @@ func optional(arguments []string) string {
 // stackCommand groups the commands on the stacks nemo keeps.
 func stackCommand() *cobra.Command {
 	command := &cobra.Command{Use: "stack", Short: "Keep stacks: their manifests, in nemo's home, and the current one"}
-	command.AddCommand(stackCreate(), stackImport(), stackUse(), stackList(), stackInspect(), stackSet(), stackRemove())
+	command.AddCommand(stackCreate(), stackEdit(), stackImport(), stackUse(), stackList(), stackInspect(), stackSet(), stackRemove())
 	return command
 }
 
 func stackImport() *cobra.Command {
 	var name, format, remote string
+	var yes bool
 	command := &cobra.Command{
 		Use:   "import FILE",
 		Short: "Keep a stack from its manifest, YAML or JSON, and make it the current one",
+		Long: `Keep a stack from its manifest, YAML or JSON, and make it the current one. In a
+terminal, the editor opens on its review first: what the manifest misses is
+marked, and can be completed before the stack is kept. --yes keeps it as it is.`,
 		Example: `  nemo stack import stack.yaml --name staging
-  nemo stack import stack.yaml --remote "oci:$PWD/build/bundles/{{ .Component }}.oci"`,
+  nemo stack import stack.yaml --remote "oci:$PWD/build/bundles/{{ .Component }}.oci" --yes`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			imported, err := stack.Read(arguments[0])
@@ -102,17 +107,16 @@ func stackImport() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err = store.Save(imported, format); err != nil {
-				return err
+			if !yes && interactive("", "") == nil {
+				var saved bool
+				if imported, saved, err = editStack(command.Context(), store, imported, modeImport); err != nil || !saved {
+					return cmp.Or(err, errors.New("stack not imported"))
+				}
 			}
-			if err = store.Use(imported.Name); err != nil {
-				return err
-			}
-			path, err := store.Path(imported.Name)
-			fmt.Fprintf(command.ErrOrStderr(), "Stack %s kept in %s, now the current one\n", imported.Name, path)
-			return err
+			return keep(command, store, imported, format, "kept")
 		},
 	}
+	command.Flags().BoolVarP(&yes, "yes", "y", false, "keep the manifest as it is, without the editor")
 	command.Flags().StringVar(&name, "name", "", "name of the stack, over the manifest's")
 	command.Flags().StringVar(&remote, "remote", "", "where the bundles given by version are, over the manifest's: where they were built or pushed")
 	command.Flags().StringVar(&format, "format", "", "format to keep it in, yaml or json (default: the file's)")
