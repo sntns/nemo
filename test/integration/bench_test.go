@@ -235,6 +235,27 @@ func (b *bench) assertNothingLeft() {
 	}
 }
 
+// job is the deploy mode of a service that runs to completion: a job for
+// Swarm, a plain service for compose, which runs no jobs.
+func (b *bench) job() string {
+	if b.orchestrator == nemoswarm.Name {
+		return "replicated-job"
+	}
+	return "replicated"
+}
+
+// secretNames returns the names of the stack's Swarm secrets.
+func (b *bench) secretNames() []string {
+	b.t.Helper()
+	list, err := b.api.SecretList(b.t.Context(), client.SecretListOptions{Filters: b.byStack()})
+	require.NoError(b.t, err)
+	names := make([]string, len(list.Items))
+	for i, secret := range list.Items {
+		names[i] = secret.Spec.Name
+	}
+	return names
+}
+
 // externalNetwork creates a network outside of the stack, as an operator
 // does for a stack to join it, and returns its name.
 func (b *bench) externalNetwork() string {

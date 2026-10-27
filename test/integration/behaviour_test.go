@@ -191,13 +191,13 @@ services:
 
 func TestBoth_failsWhenADependencyFails(t *testing.T) {
 	onBoth(t, func(t *testing.T, b *bench) {
-		err := b.install(`
+		err := b.install(fmt.Sprintf(`
 services:
   migrate:
     image: busybox:1.37
     command: ["sh", "-c", "exit 4"]
     deploy:
-      mode: replicated-job
+      mode: %s
       restart_policy:
         condition: none
   web:
@@ -206,10 +206,11 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-`)
+`, b.job()))
 
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "migrate")
+		exit := map[string]string{compose.Name: "exited with code 4", nemoswarm.Name: "non-zero exit (4)"}[b.orchestrator]
+		assert.Contains(t, err.Error(), exit, "the error is the exit of migrate")
 		assert.True(t, b.gone("web"), "web is not started after its dependency failed")
 	})
 }
