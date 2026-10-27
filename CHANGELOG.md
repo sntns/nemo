@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/sntns/nemo/compare/v0.3.0...v0.3.1) (2026-10-27)
+
+
+### Bug Fixes
+
+* **swarm:** wait for a restarted task that Swarm has not scheduled yet ([ef84cd3](https://github.com/sntns/nemo/commit/ef84cd3f3f067970c057c571ab68fe0352c28412))
+
 ## [0.3.0](https://github.com/sntns/nemo/compare/v0.2.1...v0.3.0) (2026-10-27)
 
 
