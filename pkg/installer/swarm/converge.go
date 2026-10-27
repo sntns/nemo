@@ -53,15 +53,13 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since
 
 // convergence tells whether a service has converged: the update started after since went through,
 // and the up-to-date tasks run, or completed for a job. A task with a healthcheck only runs once
-// healthy, so depends_on conditions on health hold too. It fails when Swarm paused or rolled back
-// that update.
+// healthy, so depends_on conditions on health hold too. It fails when Swarm rolled back that update.
+// One Swarm paused as a task failed is not: the restart policy restarts that task until it runs.
 func convergence(service swarm.Service, tasks []swarm.Task, since time.Time) (bool, error) {
 	if status := service.UpdateStatus; status != nil && status.StartedAt != nil && !status.StartedAt.Before(since) {
 		switch status.State {
 		case swarm.UpdateStateUpdating:
 			return false, nil
-		case swarm.UpdateStatePaused:
-			return false, fmt.Errorf("swarm paused the update: %s", status.Message)
 		case swarm.UpdateStateRollbackStarted, swarm.UpdateStateRollbackPaused, swarm.UpdateStateRollbackCompleted:
 			return false, fmt.Errorf("swarm rolled the update back: %s", status.Message)
 		}

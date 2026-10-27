@@ -68,7 +68,15 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
 				return service
 			}(),
-			nil, false, "paused the update",
+			nil, false, "",
+		},
+		"paused, then restarted": {
+			func() swarm.Service {
+				service := replicated(1, 1)
+				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
+				return service
+			}(),
+			[]swarm.Task{running}, true, "",
 		},
 		"replicated job done": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{TotalCompletions: &two}}}},
