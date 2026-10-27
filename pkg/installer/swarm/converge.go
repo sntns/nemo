@@ -1,7 +1,9 @@
 package swarm
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -36,6 +38,9 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since
 		}
 		// Converged, the tasks must still stay up for the monitor period, as docker's verify.
 		running, desired, phase := tasksOf(service, tasks)
+		if reason, _ := lastFailure(tasks); reason != "" {
+			phase = "restarting: " + reason
+		}
 		if done {
 			phase = "verifying"
 		}
@@ -53,8 +58,9 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since
 
 // convergence tells whether a service has converged: the update started after since went through,
 // and the up-to-date tasks run, or completed for a job. A task with a healthcheck only runs once
-// healthy, so depends_on conditions on health hold too. It fails when Swarm rolled back that update.
-// One Swarm paused as a task failed is not: the restart policy restarts that task until it runs.
+// healthy, so depends_on conditions on health hold too. It fails when Swarm rolled back that update,
+// or stopped restarting a failed task as its restart policy says. One Swarm paused as a task failed
+// is not: the restart policy restarts that task until it runs.
 func convergence(service swarm.Service, tasks []swarm.Task, since time.Time) (bool, error) {
 	if status := service.UpdateStatus; status != nil && status.StartedAt != nil && !status.StartedAt.Before(since) {
 		switch status.State {
@@ -63,6 +69,9 @@ func convergence(service swarm.Service, tasks []swarm.Task, since time.Time) (bo
 		case swarm.UpdateStateRollbackStarted, swarm.UpdateStateRollbackPaused, swarm.UpdateStateRollbackCompleted:
 			return false, fmt.Errorf("swarm rolled the update back: %s", status.Message)
 		}
+	}
+	if _, gaveUp := lastFailure(tasks); gaveUp {
+		return false, errors.New("swarm stopped restarting its task, as its restart policy says")
 	}
 	var running, completed, active uint64
 	for _, task := range tasks {
@@ -92,6 +101,29 @@ func convergence(service swarm.Service, tasks []swarm.Task, since time.Time) (bo
 	return status != nil && running == status.DesiredTasks && status.RunningTasks == status.DesiredTasks, nil
 }
 
+// lastFailure returns the error of the last task that failed, and whether Swarm gave up on a failed
+// task: it restarts one in a new task of the same slot, or of the same node for a global service,
+// and creates none once its restart policy says to stop.
+func lastFailure(tasks []swarm.Task) (reason string, gaveUp bool) {
+	var last *swarm.Task
+	for i, task := range tasks {
+		if !slices.Contains(failed, task.Status.State) {
+			continue
+		}
+		if last == nil || task.CreatedAt.After(last.CreatedAt) {
+			last = &tasks[i]
+		}
+		restarted := slices.ContainsFunc(tasks, func(other swarm.Task) bool {
+			return other.Slot == task.Slot && other.NodeID == task.NodeID && !slices.Contains(stopped, other.DesiredState)
+		})
+		gaveUp = gaveUp || !restarted
+	}
+	if last == nil {
+		return "", false
+	}
+	return cmp.Or(last.Status.Err, string(last.Status.State)), gaveUp
+}
+
 // tasksOf counts the running and desired tasks of the service, and names the
 // state of its least advanced up-to-date task: preparing, starting, running.
 func tasksOf(service swarm.Service, tasks []swarm.Task) (running, desired uint64, phase string) {
@@ -116,6 +148,11 @@ var order = []swarm.TaskState{
 	swarm.TaskStateNew, swarm.TaskStatePending, swarm.TaskStateAssigned, swarm.TaskStateAccepted,
 	swarm.TaskStatePreparing, swarm.TaskStateReady, swarm.TaskStateStarting, swarm.TaskStateRunning,
 }
+
+var failed = []swarm.TaskState{swarm.TaskStateFailed, swarm.TaskStateRejected}
+
+// stopped is the desired states of a task Swarm will not run anymore.
+var stopped = []swarm.TaskState{swarm.TaskStateShutdown, swarm.TaskStateRemove, swarm.TaskStateOrphaned}
 
 var terminal = []swarm.TaskState{
 	swarm.TaskStateComplete, swarm.TaskStateShutdown, swarm.TaskStateFailed,
