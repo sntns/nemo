@@ -3,6 +3,7 @@ package installer
 import (
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/compose-spec/compose-go/v2/types"
 )
@@ -44,6 +45,18 @@ func validateDependencies(problems Problems, compose *types.Project, service typ
 				(target.HealthCheck == nil || target.HealthCheck.Disable),
 			"service_healthy needs a healthcheck on "+name,
 		)
-		at.At("restart").AddIf(dependency.Restart, unsupported)
+		at.At("restart").AddIf(dependency.Restart && !derived(service, name), unsupported)
 	}
+}
+
+// derived tells whether the loader added the dependency itself, with its
+// restart, for a link or a namespace the service shares: each orchestrator
+// reports those for what they are.
+func derived(service types.ServiceConfig, name string) bool {
+	for _, link := range service.Links {
+		if target, _, _ := strings.Cut(link, ":"); target == name {
+			return true
+		}
+	}
+	return slices.Contains([]string{service.NetworkMode, service.Ipc, service.Pid, service.Uts, service.Cgroup}, types.ServicePrefix+name)
 }
