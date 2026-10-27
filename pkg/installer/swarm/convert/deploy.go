@@ -7,6 +7,8 @@ import (
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/swarm"
+
+	"github.com/sntns/nemo/pkg/docker"
 )
 
 func serviceMode(service types.ServiceConfig, deploy *types.DeployConfig) (swarm.ServiceMode, error) {
@@ -38,10 +40,10 @@ func serviceMode(service types.ServiceConfig, deploy *types.DeployConfig) (swarm
 func resources(source types.Resources) *swarm.ResourceRequirements {
 	result := &swarm.ResourceRequirements{}
 	if limits := source.Limits; limits != nil {
-		result.Limits = &swarm.Limit{NanoCPUs: nanoCPUs(limits.NanoCPUs), MemoryBytes: int64(limits.MemoryBytes), Pids: limits.Pids}
+		result.Limits = &swarm.Limit{NanoCPUs: docker.NanoCPUs(limits.NanoCPUs.Value()), MemoryBytes: int64(limits.MemoryBytes), Pids: limits.Pids}
 	}
 	if reservations := source.Reservations; reservations != nil {
-		result.Reservations = &swarm.Resources{NanoCPUs: nanoCPUs(reservations.NanoCPUs), MemoryBytes: int64(reservations.MemoryBytes)}
+		result.Reservations = &swarm.Resources{NanoCPUs: docker.NanoCPUs(reservations.NanoCPUs.Value()), MemoryBytes: int64(reservations.MemoryBytes)}
 		for _, generic := range reservations.GenericResources {
 			if generic.DiscreteResourceSpec != nil {
 				result.Reservations.GenericResources = append(result.Reservations.GenericResources, swarm.GenericResource{
@@ -51,10 +53,6 @@ func resources(source types.Resources) *swarm.ResourceRequirements {
 		}
 	}
 	return result
-}
-
-func nanoCPUs(cpus types.NanoCPUs) int64 {
-	return int64(float64(cpus) * 1e9)
 }
 
 func placement(service types.ServiceConfig, source types.Placement) (*swarm.Placement, error) {
