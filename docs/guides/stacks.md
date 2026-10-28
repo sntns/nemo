@@ -113,12 +113,12 @@ nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), an
 `nemo stack create`, `nemo stack edit` and `nemo stack import` share an editor that takes the terminal, one question at a time. The steps run left to right at the top, each marked complete (✓), incomplete (!) or not reached yet:
 
 1. **Bundles**: where they are, a directory of OCI layouts or a registry, then which ones and their version. A registry and namespace is given as `REGISTRY/NAMESPACE`: `registry.example.com/shop` for bundles pushed as `registry.example.com/shop/NAME:VERSION`, from which the editor writes the stack's remote, `docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}`.
-2. **Target**: which Docker it is, the environment's (`DOCKER_HOST`, the current docker context, or the local socket), an address or a docker context; the orchestrator; and how images reach the target.
+2. **Target**: which Docker it is, the environment's (`DOCKER_HOST`, the current docker context, or the local socket), an address or a docker context; the orchestrator; how images reach the target; and what each volume type the bundles use is made of: Docker's own local volumes, a directory of the host each, or a directory of an NFS export each, as [the targets guide](targets.md#volume-types) writes them. A type written otherwise in the manifest is kept as it is.
 3. **Parameters**: each parameter the bundles declare, with the description and the default their authors wrote.
 4. **Credentials**: each credential, where it is read from (a file, an environment variable, a command, or its value), then the file, variable, command or value itself.
 5. **Review**: the whole stack, what is missing marked `!`. Each line opens the step that changes it; the last saves the stack. A review taller than the terminal shows the lines around the cursor, and how many it leaves out above and below.
 
-Enter goes on, shift+tab goes back, esc quits without saving. `edit` and `import` open on the review. The volume types the bundles use get a local volume: change them in the manifest for another driver.
+Enter goes on, shift+tab goes back, esc quits without saving. `edit` and `import` open on the review.
 
 ## Bringing a stack up
 

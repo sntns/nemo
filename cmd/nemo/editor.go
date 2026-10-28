@@ -75,14 +75,19 @@ const (
 	screenImages
 	screenParameter
 	screenCredential
+	screenVolume
 	screenReview
 )
 
 type screen struct {
 	kind screenKind
 	step step
-	// name is the parameter's or the credential's.
+	// name is the parameter's, the credential's or the volume type's.
 	name string
+}
+
+func credentialScreen(name string) screen {
+	return screen{kind: screenCredential, step: stepCredentials, name: name}
 }
 
 // keepRemote is the source of bundles located by a remote the editor does not
@@ -119,7 +124,9 @@ type editor struct {
 	found     map[string]cnab.ExtendedBundle
 	chosen    map[string]bool
 	bundles   map[string]cnab.ExtendedBundle
-	kinds     map[string]string
+	// kinds are the kinds chosen on the screens of a kind and a value: a
+	// credential's source, or what a volume type is made of.
+	kinds map[screen]string
 	// loading says what is being read in the background: versions, layouts or bundles.
 	loading map[string]string
 	failure string
@@ -146,7 +153,7 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 		ctx: ctx, mode: mode, stack: edited, taken: taken,
 		askName: mode != modeEdit && (edited.Name == "" || taken(edited.Name)),
 		found:   map[string]cnab.ExtendedBundle{}, chosen: map[string]bool{}, bundles: map[string]cnab.ExtendedBundle{},
-		kinds: map[string]string{}, visited: map[step]bool{}, loading: map[string]string{},
+		kinds: map[screen]string{}, visited: map[step]bool{}, loading: map[string]string{},
 		input: textinput.New(), spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80, height: 24,
 		load: nemo.LoadBundle, tags: bundle.RegistryTags{}.ListTags,
 	}
@@ -180,7 +187,7 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 	}
 	e.names = strings.Join(names, " ")
 	for _, strategy := range edited.Credentials {
-		e.kinds[strategy.Name] = strategy.Source.Key
+		e.kinds[credentialScreen(strategy.Name)] = strategy.Source.Key
 	}
 	if mode != modeCreate {
 		for _, s := range []step{stepName, stepBundles, stepTarget, stepParameters, stepCredentials} {
@@ -237,11 +244,14 @@ func (e *editor) screens() []screen {
 		screens = append(screens, screen{kind: screenContext, step: stepTarget})
 	}
 	screens = append(screens, screen{kind: screenOrchestrator, step: stepTarget}, screen{kind: screenImages, step: stepTarget})
+	for _, name := range slices.Sorted(maps.Keys(e.stack.Target.Volumes)) {
+		screens = append(screens, screen{kind: screenVolume, step: stepTarget, name: name})
+	}
 	for _, name := range e.parameterNames() {
 		screens = append(screens, screen{kind: screenParameter, step: stepParameters, name: name})
 	}
 	for _, name := range e.credentialNames() {
-		screens = append(screens, screen{kind: screenCredential, step: stepCredentials, name: name})
+		screens = append(screens, credentialScreen(name))
 	}
 	return append(screens, screen{kind: screenReview, step: stepReview})
 }
@@ -449,10 +459,16 @@ func (e *editor) enter() {
 		if strategy, given := e.strategy(screen.name); given {
 			value = strategy.Source.Value
 		}
-		if e.kinds[screen.name] == "" {
-			e.kinds[screen.name] = host.SourcePath
+		if e.kinds[screen] == "" {
+			e.kinds[screen] = host.SourcePath
 		}
-		e.echo(screen.name)
+		e.echo(screen)
+	case screenVolume:
+		kind, made := volumeKindOf(e.stack.Target.Volumes[screen.name])
+		if e.kinds[screen] == "" {
+			e.kinds[screen] = kind
+		}
+		value = made
 	case screenReview:
 		e.cursor = len(e.reviewLines()) - 1
 		for i, line := range e.reviewLines() {
@@ -560,7 +576,7 @@ func (e *editor) loadBundles() tea.Cmd {
 }
 
 // read records the bundles read, and gives the volume types they use a
-// local volume on the target, to change in the manifest for another driver.
+// local volume on the target, until the Target step makes them otherwise.
 func (e *editor) read(bundles map[string]cnab.ExtendedBundle) {
 	e.bundles = bundles
 	for _, volumeType := range volumeTypes(e.loaded()) {
@@ -632,7 +648,10 @@ func (e *editor) paste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 		if len(e.versions) > 0 {
 			return e, nil
 		}
-	case screenCredential:
+	case screenCredential, screenVolume:
+		if !e.valued(screen) {
+			return e, nil
+		}
 		e.field = 1
 	}
 	var cmd tea.Cmd
@@ -677,26 +696,28 @@ func (e *editor) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return e, nil
 		}
 		return e.choose(key, len(names))
-	case screenCredential:
+	case screenCredential, screenVolume:
 		switch {
 		case key == "up" || key == "down":
-			e.field = 1 - e.field
+			if e.valued(screen) {
+				e.field = 1 - e.field
+			}
 			return e, nil
 		case e.field == 0 && (key == "left" || key == "right"):
-			kinds := sourceKinds()
-			index := slices.Index(kinds, e.kinds[screen.name])
+			kinds := e.kindsOf(screen)
+			index := slices.Index(kinds, e.kinds[screen])
 			if key == "left" {
 				index = (index + len(kinds) - 1) % len(kinds)
 			} else {
 				index = (index + 1) % len(kinds)
 			}
-			e.kinds[screen.name] = kinds[index]
-			e.echo(screen.name)
+			e.kinds[screen] = kinds[index]
+			e.echo(screen)
 			return e, nil
-		case e.field == 0 && key == "enter":
+		case e.field == 0 && key == "enter" && e.valued(screen):
 			e.field = 1
 			return e, nil
-		case e.field == 0:
+		case e.field == 0 && key != "enter":
 			return e, nil
 		}
 	case screenReview:
@@ -857,6 +878,12 @@ func (e *editor) accept(value string) (tea.Cmd, error) {
 		e.setParameter(screen.name, value)
 	case screenCredential:
 		return nil, e.setCredential(screen.name, value)
+	case screenVolume:
+		volumeType, err := volumeTypeOf(e.kinds[screen], value, e.stack.Target.Volumes[screen.name])
+		if err != nil {
+			return nil, err
+		}
+		e.stack.Target.Volumes[screen.name] = volumeType
 	}
 	return nil, nil
 }
@@ -969,7 +996,7 @@ func (e *editor) setCredential(name, value string) error {
 		}
 		return nil
 	}
-	strategy, err := credentials.Parse(name, e.kinds[name]+":"+value)
+	strategy, err := credentials.Parse(name, e.kinds[credentialScreen(name)]+":"+value)
 	if err != nil {
 		return err
 	}
@@ -978,11 +1005,30 @@ func (e *editor) setCredential(name, value string) error {
 }
 
 // echo hides what is typed of a credential given as its value.
-func (e *editor) echo(name string) {
+func (e *editor) echo(screen screen) {
 	e.input.EchoMode = textinput.EchoNormal
-	if e.kinds[name] == host.SourceValue {
+	if screen.kind == screenCredential && e.kinds[screen] == host.SourceValue {
 		e.input.EchoMode = textinput.EchoPassword
 	}
+}
+
+// kindsOf are the kinds a screen of a kind and a value offers: the sources
+// of a credential, or what a volume type is made of, the manifest's own
+// when the editor did not make it.
+func (e *editor) kindsOf(screen screen) []string {
+	if screen.kind == screenCredential {
+		return sourceKinds()
+	}
+	kinds := []string{volumeLocal, volumeHost, volumeNFS}
+	if kind, _ := volumeKindOf(e.stack.Target.Volumes[screen.name]); kind == volumeWritten {
+		kinds = append(kinds, volumeWritten)
+	}
+	return kinds
+}
+
+// valued says whether the kind chosen on the screen takes a value.
+func (e *editor) valued(screen screen) bool {
+	return screen.kind == screenCredential || volumeTitles[e.kinds[screen]] != ""
 }
 
 func sourceKinds() []string {
@@ -1075,7 +1121,7 @@ func (e *editor) reviewLines() []reviewLine {
 		problem: len(e.problems(stepTarget)) > 0,
 	}, screenDocker, ""))
 	for _, volumeType := range slices.Sorted(maps.Keys(e.stack.Target.Volumes)) {
-		lines = append(lines, reviewLine{label: "volume " + volumeType, value: cmp.Or(e.stack.Target.Volumes[volumeType].Driver, "local"), indent: true})
+		lines = append(lines, opening(reviewLine{label: "volume " + volumeType, value: volumeSummary(e.stack.Target.Volumes[volumeType]), indent: true}, screenVolume, volumeType))
 	}
 	if names := e.parameterNames(); len(names) > 0 {
 		lines = append(lines, reviewLine{label: "Parameters"})
@@ -1225,6 +1271,12 @@ func (e *editor) heading(screen screen) (string, string) {
 		return "Address of the target's Docker", "unix://, tcp:// or ssh://user@host"
 	case screenContext:
 		return "Docker context of the target", "a context of docker context ls"
+	case screenVolume:
+		var kinds []string
+		for _, kind := range e.kindsOf(screen) {
+			kinds = append(kinds, kind+": "+volumeKindTitles[kind])
+		}
+		return "Volume type " + screen.name, strings.Join(kinds, " · ")
 	case screenOrchestrator:
 		return "Orchestrator", ""
 	case screenImages:
@@ -1293,10 +1345,10 @@ func (e *editor) body(screen screen) ([]string, int) {
 			lines = append(lines, e.optionLine(i, version))
 		}
 		return lines, e.cursor
-	case screenCredential:
+	case screenCredential, screenVolume:
 		var kinds []string
-		for _, kind := range sourceKinds() {
-			if kind == e.kinds[screen.name] {
+		for _, kind := range e.kindsOf(screen) {
+			if kind == e.kinds[screen] {
 				kind = accent.Render("[ " + kind + " ]")
 			} else {
 				kind = faint.Render("  " + kind + "  ")
@@ -1313,10 +1365,15 @@ func (e *editor) body(screen screen) ([]string, int) {
 		if e.field == 0 {
 			input = faint.Render("  " + cmp.Or(e.input.Value(), "…"))
 		}
-		return []string{
-			fmt.Sprintf(" %s Source    %s", marker(0), strings.Join(kinds, "")),
-			fmt.Sprintf(" %s %-9s %s", marker(1), sourceTitles[e.kinds[screen.name]], input),
-		}, e.field
+		label, titles := "Source", sourceTitles
+		if screen.kind == screenVolume {
+			label, titles = "Volumes", volumeTitles
+		}
+		lines := []string{fmt.Sprintf(" %s %-9s %s", marker(0), label, strings.Join(kinds, ""))}
+		if e.valued(screen) {
+			lines = append(lines, fmt.Sprintf(" %s %-9s %s", marker(1), titles[e.kinds[screen]], input))
+		}
+		return lines, e.field
 	case screenReview:
 		return e.review()
 	}
@@ -1383,6 +1440,11 @@ func (e *editor) help(screen screen) string {
 		return "↑/↓ move · space choose · enter next" + back
 	case screenCredential:
 		return "←/→ source · ↑/↓ source or value · enter next" + back
+	case screenVolume:
+		if !e.valued(screen) {
+			return "←/→ kind · enter next" + back
+		}
+		return "←/→ kind · ↑/↓ kind or value · enter next" + back
 	case screenReview:
 		return "↑/↓ move · enter opens a line, or saves on the last · esc quit"
 	}

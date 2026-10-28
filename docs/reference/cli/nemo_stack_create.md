@@ -6,9 +6,8 @@ Create a stack in the editor: its bundles, its target, and the parameters and cr
 
 Create a stack in the editor, and make it the current one. The bundles come
 from a directory of OCI layouts or from a registry; the editor then asks for
-the target, and for the parameters and the credentials they declare, one at a
-time, and reviews the stack before saving it. The volume types the bundles use
-get a local volume, to change in the manifest for another driver.
+the target, the volume types they use, and the parameters and the credentials
+they declare, one at a time, and reviews the stack before saving it.
 
 ```
 nemo stack create [NAME] [flags]

@@ -31,9 +31,8 @@ func stackCreate() *cobra.Command {
 		Short: "Create a stack in the editor: its bundles, its target, and the parameters and credentials they declare",
 		Long: `Create a stack in the editor, and make it the current one. The bundles come
 from a directory of OCI layouts or from a registry; the editor then asks for
-the target, and for the parameters and the credentials they declare, one at a
-time, and reviews the stack before saving it. The volume types the bundles use
-get a local volume, to change in the manifest for another driver.`,
+the target, the volume types they use, and the parameters and the credentials
+they declare, one at a time, and reviews the stack before saving it.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
 			if err := interactive("nemo stack create", "write the manifest and nemo stack import it"); err != nil {
