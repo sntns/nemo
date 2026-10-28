@@ -140,9 +140,37 @@ func status() *cobra.Command {
 // statusText is a line for each installation, its services below when it
 // is not ready, or with all, every line's columns lined up.
 func statusText(current nemo.StackStatus, all bool, now time.Time) string {
+	var text strings.Builder
+	title := []string{current.Target.Orchestrator}
+	if where := cmp.Or(current.Target.Host, current.Target.Context); where != "" {
+		title = append(title, where)
+	}
+	fmt.Fprintf(&text, "%s%s\n\n", bold.Render(current.Name), faint.Render(" · "+strings.Join(title, " · ")))
+
 	var rows []row
 	for _, installation := range current.Installations {
-		line, unfold := installationRow(installation, all, now)
+		ready := 0
+		for _, service := range installation.Services {
+			if serviceReady(service) {
+				ready++
+			}
+		}
+		count := ""
+		if len(installation.Services) > 0 {
+			count = fmt.Sprintf("%d/%d services", ready, len(installation.Services))
+		}
+		line := row{cells: [4]string{installation.Name, installation.Version, lastAction(installation.Action, installation.Result) + " " + ago(installation.Modified, now), count}}
+		unfold := true
+		switch {
+		case installation.Result == cnab.StatusFailed || installation.Result == cnab.StatusCanceled:
+			line.icon, line.styles = red.Render("✖"), [4]lipgloss.Style{bold, plain, red, plain}
+		case !installation.Installed:
+			line.icon, line.styles, unfold = faint.Render("·"), [4]lipgloss.Style{faint, faint, faint, faint}, false
+		case installation.Result != cnab.StatusSucceeded || ready < len(installation.Services):
+			line.icon, line.styles = yellow.Render("◌"), [4]lipgloss.Style{bold, plain, yellow, yellow}
+		default:
+			line.icon, line.styles, unfold = green.Render("✔"), [4]lipgloss.Style{plain, faint, faint, faint}, all
+		}
 		rows = append(rows, line)
 		if unfold {
 			for _, service := range installation.Services {
@@ -150,63 +178,7 @@ func statusText(current nemo.StackStatus, all bool, now time.Time) string {
 			}
 		}
 	}
-	widths := columnWidths(rows)
-	var text strings.Builder
-	text.WriteString(statusTitle(current))
-	for _, line := range rows {
-		text.WriteString(line.render(widths))
-	}
-	return text.String()
-}
 
-// statusTitle is the stack's name, its orchestrator, and where it runs.
-func statusTitle(current nemo.StackStatus) string {
-	title := []string{current.Target.Orchestrator}
-	if where := cmp.Or(current.Target.Host, current.Target.Context); where != "" {
-		title = append(title, where)
-	}
-	return bold.Render(current.Name) + faint.Render(" · "+strings.Join(title, " · ")) + "\n\n"
-}
-
-// installationRow is the line of an installation: red when its last action
-// failed, faint once uninstalled, yellow on its way, green once ready. It
-// tells whether its services unfold below it: unless it is ready or
-// uninstalled, and when ready with all.
-func installationRow(installation nemo.InstallationState, all bool, now time.Time) (row, bool) {
-	ready := readyServices(installation.Services)
-	count := ""
-	if len(installation.Services) > 0 {
-		count = fmt.Sprintf("%d/%d services", ready, len(installation.Services))
-	}
-	line := row{cells: [4]string{installation.Name, installation.Version, lastAction(installation.Action, installation.Result) + " " + ago(installation.Modified, now), count}}
-	switch {
-	case installation.Result == cnab.StatusFailed || installation.Result == cnab.StatusCanceled:
-		line.icon, line.styles = red.Render("✖"), [4]lipgloss.Style{bold, plain, red, plain}
-		return line, true
-	case !installation.Installed:
-		line.icon, line.styles = faint.Render("·"), [4]lipgloss.Style{faint, faint, faint, faint}
-		return line, false
-	case installation.Result != cnab.StatusSucceeded || ready < len(installation.Services):
-		line.icon, line.styles = yellow.Render("◌"), [4]lipgloss.Style{bold, plain, yellow, yellow}
-		return line, true
-	}
-	line.icon, line.styles = green.Render("✔"), [4]lipgloss.Style{plain, faint, faint, faint}
-	return line, all
-}
-
-func readyServices(services []nemo.ServiceState) int {
-	ready := 0
-	for _, service := range services {
-		if serviceReady(service) {
-			ready++
-		}
-	}
-	return ready
-}
-
-// columnWidths is the width of each column: its widest cell, the indent of
-// the first included.
-func columnWidths(rows []row) [4]int {
 	var widths [4]int
 	for _, line := range rows {
 		for i, cell := range line.cells {
@@ -216,30 +188,26 @@ func columnWidths(rows []row) [4]int {
 			widths[i] = max(widths[i], len(cell))
 		}
 	}
-	return widths
-}
-
-// render writes the row with its columns at the widths, up to its last cell.
-func (line row) render(widths [4]int) string {
-	last := 0
-	for i, cell := range line.cells {
-		if cell != "" {
-			last = i
+	for _, line := range rows {
+		last := 0
+		for i, cell := range line.cells {
+			if cell != "" {
+				last = i
+			}
 		}
+		text.WriteString(strings.Repeat(" ", line.indent) + line.icon + " ")
+		for i := 0; i <= last; i++ {
+			cell, width := line.cells[i], widths[i]
+			if i == 0 {
+				width -= line.indent
+			}
+			if i < last {
+				cell = fmt.Sprintf("%-*s  ", width, cell)
+			}
+			text.WriteString(line.styles[i].Render(cell))
+		}
+		text.WriteString("\n")
 	}
-	var text strings.Builder
-	text.WriteString(strings.Repeat(" ", line.indent) + line.icon + " ")
-	for i := 0; i <= last; i++ {
-		cell, width := line.cells[i], widths[i]
-		if i == 0 {
-			width -= line.indent
-		}
-		if i < last {
-			cell = fmt.Sprintf("%-*s  ", width, cell)
-		}
-		text.WriteString(line.styles[i].Render(cell))
-	}
-	text.WriteString("\n")
 	return text.String()
 }
 
