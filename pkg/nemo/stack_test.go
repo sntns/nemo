@@ -104,8 +104,9 @@ func TestUpAndDown(t *testing.T) {
 	assert.Equal(t, "true", fake.last().Parameters[cnab.ParameterPurge])
 	assert.Len(t, result.Runs, 1)
 
-	_, err = nemo.Down(ctx, DownRequest{Name: "demo"})
-	require.EqualError(t, err, "stack demo has no installations")
+	result, err = nemo.Down(ctx, DownRequest{Name: "demo"})
+	require.NoError(t, err, "a stack already down")
+	assert.Empty(t, result.Runs)
 }
 
 func TestDownDependantsFirst(t *testing.T) {

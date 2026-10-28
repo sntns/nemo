@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"time"
 
 	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/api/types/volume"
@@ -206,15 +205,15 @@ func (orchestrator *Orchestrator) createSecrets(ctx context.Context, project *in
 // changed, then waits until they converged before the next level: Swarm
 // schedules services on its own, so depends_on is honoured that way.
 func (orchestrator *Orchestrator) createServices(ctx context.Context, project *installer.Project, specs *projectSpecs, events progress.Sink) error {
-	since := time.Now()
 	for _, level := range project.Levels {
 		ids := make([]string, len(level))
+		owns := make([]ownUpdate, len(level))
 		for i, name := range level {
-			id, change, err := orchestrator.createService(ctx, project, specs.services[name])
+			id, change, own, err := orchestrator.createService(ctx, project, specs.services[name])
 			if err != nil {
 				return fmt.Errorf("service %s: %w", name, err)
 			}
-			ids[i] = id
+			ids[i], owns[i] = id, own
 			events.Emit(progress.Event{Group: "services", Item: name, State: progress.Working, Message: change})
 		}
 
@@ -224,7 +223,7 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 				report := func(running, desired uint64, phase string) {
 					events.Emit(progress.Event{Group: "services", Item: name, State: progress.Working, Current: int64(running), Total: int64(desired), Message: phase})
 				}
-				if err := orchestrator.converge(groupContext, ids[i], since, report); err != nil {
+				if err := orchestrator.converge(groupContext, ids[i], owns[i], report); err != nil {
 					if ctx.Err() == nil && errors.Is(err, context.Canceled) {
 						return err
 					}
@@ -243,30 +242,34 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 }
 
 // createService creates the service, or updates it when its hash is not
-// the spec's, and returns its ID and what it did: created, updated or
-// unchanged. Swarm gets the credentials of the image's registry for the
-// nodes that pull it.
-func (orchestrator *Orchestrator) createService(ctx context.Context, project *installer.Project, spec *swarm.ServiceSpec) (string, string, error) {
+// the spec's, and returns its ID, what it did (created, updated or
+// unchanged) and which of its updates is nemo's. Swarm gets the credentials
+// of the image's registry for the nodes that pull it.
+func (orchestrator *Orchestrator) createService(ctx context.Context, project *installer.Project, spec *swarm.ServiceSpec) (string, string, ownUpdate, error) {
 	if err := orchestrator.resolve(ctx, spec); err != nil {
-		return "", "", err
+		return "", "", ownUpdate{}, err
 	}
 	existing, err := orchestrator.docker.ServiceFind(ctx, spec.Name)
 	if err != nil {
-		return "", "", err
+		return "", "", ownUpdate{}, err
 	}
 	registryAuth, err := project.RegistryAuth.For(spec.TaskTemplate.ContainerSpec.Image)
 	if err != nil {
-		return "", "", err
+		return "", "", ownUpdate{}, err
 	}
 	spec.Labels[labels.Revision] = project.Installation.Revision
 	switch {
 	case existing == nil:
 		id, err := orchestrator.docker.ServiceCreate(ctx, spec, registryAuth)
-		return id, "created", err
+		return id, "created", ownUpdate{changed: true}, err
 	case existing.Spec.Labels[labels.Hash] != spec.Labels[labels.Hash]:
-		return existing.ID, "updated", orchestrator.docker.ServiceUpdate(ctx, existing, spec, registryAuth)
+		own := ownUpdate{changed: true}
+		if status := existing.UpdateStatus; status != nil && status.StartedAt != nil {
+			own.after = *status.StartedAt
+		}
+		return existing.ID, "updated", own, orchestrator.docker.ServiceUpdate(ctx, existing, spec, registryAuth)
 	}
-	return existing.ID, "unchanged", nil
+	return existing.ID, "unchanged", ownUpdate{}, nil
 }
 
 // resolve fills the IDs of the configs and secrets a service uses, external ones included.

@@ -220,13 +220,11 @@ type stackEntry struct {
 
 // Down uninstalls every installation of the stack, dependants first. It
 // needs nothing but the stack's name: the rest comes from the installations.
+// A stack with nothing installed is already down.
 func (nemo *Nemo) Down(ctx context.Context, request DownRequest) (StackResult, error) {
 	present, err := nemo.present(ctx, request.Name)
 	if err != nil {
 		return StackResult{}, err
-	}
-	if len(present) == 0 {
-		return StackResult{}, fmt.Errorf("stack %s has no installations", request.Name)
 	}
 	runs, err := nemo.uninstall(ctx, request.Name, present, request.Purge, request.Progress)
 	return StackResult{Runs: runs}, err

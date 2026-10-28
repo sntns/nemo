@@ -93,6 +93,39 @@ func TestBuild_refusals(t *testing.T) {
 	assert.Contains(t, err.Error(), "secrets.file: a bundle carries no files")
 }
 
+// The build knows no value of the variables: a typed field that needs one is valid whatever it
+// will be, and one whose variable has a default is checked with it.
+func TestBuild_variablesInTypedFields(t *testing.T) {
+	t.Parallel()
+	build := func(t *testing.T, service string) error {
+		directory := t.TempDir()
+		composeFile := filepath.Join(directory, "compose.yaml")
+		layout := filepath.Join(directory, "web.oci")
+		testimage.Write(t, layout)
+		project := "x-nemo-bundle:\n  name: web\n  version: 1.0.0\nservices:\n  web:\n    image: web:latest\n" + service
+		require.NoError(t, os.WriteFile(composeFile, []byte(project), 0o644))
+		_, err := Build(context.Background(), BuildRequest{
+			ComposeFiles: []string{composeFile},
+			Images:       map[string]string{"web:latest": "oci:" + layout},
+			Installer:    "gill:dev",
+		})
+		return err
+	}
+
+	t.Run("unknown", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, build(t, "    ports: [\"${WEB_PORT}:80\"]\n    deploy:\n      replicas: ${REPLICAS}\n"))
+	})
+	t.Run("a valid default", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, build(t, "    ports: [\"${WEB_PORT:-8080}:80\"]\n"))
+	})
+	t.Run("an invalid default", func(t *testing.T) {
+		t.Parallel()
+		require.Error(t, build(t, "    deploy:\n      replicas: ${REPLICAS:-two}\n"))
+	})
+}
+
 func TestParseLocation(t *testing.T) {
 	t.Parallel()
 	for text, want := range map[string]Location{

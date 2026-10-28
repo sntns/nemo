@@ -299,3 +299,24 @@ func TestProject_Validate(t *testing.T) {
 	assert.Contains(t, err.Error(), "services.web.build: not supported")
 	assert.Contains(t, err.Error(), "services.web.depends_on.db: service_healthy needs a healthcheck on db")
 }
+
+// The loader turns a link, or a namespace shared with another service, into a
+// dependency that restarts with it: that restart is the loader's, not the
+// project's, and is not reported.
+func TestProject_ValidateLeavesTheDependenciesTheLoaderAdded(t *testing.T) {
+	t.Parallel()
+
+	bundle := testBundle(withCompose(map[string]any{
+		"services": map[string]any{
+			"web":     map[string]any{"image": "web", "links": []any{"db:database"}},
+			"sidecar": map[string]any{"image": "sidecar", "network_mode": "service:web"},
+			"db":      map[string]any{"image": "postgres"},
+		},
+	}))
+	operation, err := ReadOperation(container(t, bundle, nil, nil))
+	require.NoError(t, err)
+	project, err := LoadProject(context.Background(), operation)
+	require.NoError(t, err)
+
+	assert.NoError(t, project.Validate())
+}

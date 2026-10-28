@@ -52,6 +52,8 @@ services:
 | `${LOG_LEVEL:-info}` | `log-level` | no | `info` |
 | `${WORKERS:?...}` | `workers` | yes | — |
 
+A variable may stand anywhere a value of the compose file goes, a published port or a number of replicas included: `"${WEB_PORT}:80"`. `nemo bundle build` knows no value yet, so it checks such a field only with its default, when it has one, and gill checks it with the value given.
+
 When the bundle is installed, gill fills the compose project with the values given: in the stack's manifest, with `nemo stack set --param`, or with `--param` on `nemo installation install`. A config read from a variable is a parameter too:
 
 ```yaml

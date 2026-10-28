@@ -11,7 +11,7 @@ import (
 // compose does.
 func resources(service types.ServiceConfig) container.Resources {
 	resources := container.Resources{
-		NanoCPUs:          int64(float64(service.CPUS) * 1e9),
+		NanoCPUs:          docker.NanoCPUs(service.CPUS),
 		Memory:            int64(service.MemLimit),
 		MemoryReservation: int64(service.MemReservation),
 		MemorySwap:        int64(service.MemSwapLimit),
@@ -41,7 +41,7 @@ func resources(service types.ServiceConfig) container.Resources {
 	}
 	if limits := service.Deploy.Resources.Limits; limits != nil {
 		if resources.NanoCPUs == 0 {
-			resources.NanoCPUs = int64(float64(limits.NanoCPUs) * 1e9)
+			resources.NanoCPUs = docker.NanoCPUs(limits.NanoCPUs.Value())
 		}
 		if resources.Memory == 0 {
 			resources.Memory = int64(limits.MemoryBytes)

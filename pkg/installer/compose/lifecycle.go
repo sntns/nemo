@@ -11,22 +11,56 @@ import (
 	"github.com/sntns/nemo/pkg/installer/compose/convert"
 )
 
+// steadyFor is how long a container must stay up, without the daemon restarting it, before its
+// service counts as up: as with Swarm's monitor period, a container that starts then exits is caught.
+const steadyFor = 5 * time.Second
+
+// wait waits until the container reaches the wanted condition, and stays there for steadyFor
+// unless it was to complete.
 func (orchestrator *Orchestrator) wait(ctx context.Context, id string, wanted convert.Condition) error {
+	var steady steadiness
 	for {
 		inspected, err := orchestrator.docker.ContainerInspect(ctx, id)
 		if err != nil {
 			return err
 		}
 		done, err := reached(inspected.State, wanted)
-		if done || err != nil {
+		switch {
+		case err != nil:
 			return err
+		case !done:
+			steady = steadiness{}
+		case wanted == convert.Completed || steady.held(inspected.State, time.Now()):
+			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("not %s in time: %w", wanted, ctx.Err())
+			return fmt.Errorf("not %s in time%s: %w", wanted, lastExit(inspected.State), ctx.Err())
 		case <-time.After(500 * time.Millisecond):
 		}
 	}
+}
+
+// steadiness follows a container that reached its condition: it holds once the container ran
+// for steadyFor without starting again.
+type steadiness struct {
+	startedAt string
+	since     time.Time
+}
+
+func (steady *steadiness) held(state *container.State, now time.Time) bool {
+	if state.StartedAt != steady.startedAt {
+		*steady = steadiness{startedAt: state.StartedAt, since: now}
+	}
+	return now.Sub(steady.since) >= steadyFor
+}
+
+// lastExit says how the container last exited, when it did.
+func lastExit(state *container.State) string {
+	if state == nil || state.ExitCode == 0 {
+		return ""
+	}
+	return fmt.Sprintf(", it last exited with code %d", state.ExitCode)
 }
 
 // waiting is what a service does until its containers reach the condition.
