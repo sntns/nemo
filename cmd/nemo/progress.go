@@ -267,20 +267,16 @@ var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 // terminal's width, so that the lines to go back over are the lines
 // written. lipgloss brings the colors down to what the terminal shows.
 func (live *live) draw() {
-	live.mutex.Lock()
-	frame := live.render()
-	live.mutex.Unlock()
-	width, _, err := term.GetSize(int(live.output.Fd()))
+	width, height, err := term.GetSize(int(live.output.Fd()))
 	if err != nil || width <= 0 {
-		width = 120
+		width, height = 120, 0
 	}
+	live.mutex.Lock()
+	lines := live.lines(width, height)
+	live.mutex.Unlock()
 	var screen strings.Builder
 	if live.drawn > 0 {
 		fmt.Fprintf(&screen, "\033[%dA", live.drawn)
-	}
-	var lines []string
-	for _, line := range frame {
-		lines = append(lines, wrap(line, width-1)...)
 	}
 	for _, line := range lines {
 		screen.WriteString("\r\033[2K")
@@ -299,6 +295,26 @@ func (live *live) draw() {
 	_, _ = lipgloss.Fprint(live.output, screen.String())
 }
 
+// lines are the frame's lines, wrapped to the width. While the frame is
+// redrawn, they fit in the terminal's height, as the cursor goes back over
+// the screen only: the services ready fold into their installation's count,
+// then the bottom is cut. The last frame, which nothing redraws, is whole.
+func (live *live) lines(width, height int) []string {
+	wrapped := func(frame []string) []string {
+		var lines []string
+		for _, line := range frame {
+			lines = append(lines, wrap(line, width-1)...)
+		}
+		return lines
+	}
+	lines := wrapped(live.render(false))
+	// The cursor stays on the line after the frame.
+	if live.ended || height <= 0 || len(lines) < height {
+		return lines
+	}
+	return window(wrapped(live.render(true)), 0, height-1)
+}
+
 // wrap cuts the line into lines of the width, the next ones indented as the
 // first, so that an error is read whole.
 func wrap(line string, width int) []string {
@@ -315,8 +331,9 @@ func wrap(line string, width int) []string {
 }
 
 // render returns the lines of the frame: a title, then a line for each
-// installation, and the services of those at work or failed.
-func (live *live) render() []string {
+// installation, and the services of those at work or failed; folded, the
+// services ready are left to their installation's count.
+func (live *live) render(folded bool) []string {
 	frame := []string{bold.Render(live.title) + faint.Render(" · "+plural(len(live.views.ordered), "installation")), ""}
 	width := 0
 	for _, view := range live.views.ordered {
@@ -338,7 +355,7 @@ func (live *live) render() []string {
 		case progress.Error:
 			frame = append(frame, red.Render("✖")+" "+bold.Render(name)+"  "+action+"  "+red.Render(view.message))
 			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view)...)
+			frame = append(frame, live.services(view, folded)...)
 			for _, line := range view.output {
 				if !view.repeats(line) {
 					frame = append(frame, faint.Render("    "+line))
@@ -348,7 +365,7 @@ func (live *live) render() []string {
 			spinner := cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)])
 			frame = append(frame, spinner+" "+bold.Render(name)+"  "+action+"  "+doing(view)+faint.Render("  "+elapsed(view).String()))
 			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view)...)
+			frame = append(frame, live.services(view, folded)...)
 		}
 	}
 	return frame
@@ -378,8 +395,8 @@ func doing(view *installationView) string {
 // services are the lines of the services of an installation, with their
 // tasks or containers counted: green once ready, cyan while Swarm verifies
 // that they stay up or Compose checks their health, yellow on their way,
-// red on failure.
-func (live *live) services(view *installationView) []string {
+// red on failure. Folded, those ready are left out.
+func (live *live) services(view *installationView, folded bool) []string {
 	width := 0
 	for _, name := range view.services {
 		width = max(width, len(name))
@@ -387,6 +404,9 @@ func (live *live) services(view *installationView) []string {
 	var rendered []string
 	for _, name := range slices.Sorted(slices.Values(view.services)) {
 		task := view.tasks[name]
+		if folded && task.State == progress.Done {
+			continue
+		}
 		icon, style := "◌", yellow
 		switch {
 		case task.State == progress.Done:
