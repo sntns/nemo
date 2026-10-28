@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"regexp"
 	"strings"
@@ -63,7 +64,7 @@ func TestLive_uninstall(t *testing.T) {
 	web.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: "uninstall"})
 	web.Emit(progress.Event{Group: "services", Item: "web", State: progress.Done, Message: "removed"})
 	web.Emit(progress.Event{Group: "volumes", Item: "demo_data", State: progress.Warning, Message: "kept: still in use"})
-	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(), "\n")), "D")
+	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(false), "\n")), "D")
 	assert.Equal(t, `demo · 1 installation
 
 ⠋ web  uninstall  1/1 services removed  D
@@ -75,7 +76,7 @@ func TestLive(t *testing.T) {
 	t.Parallel()
 	live := &live{title: "demo · swarm"}
 	upEvents(live)
-	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(), "\n")), "D")
+	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(false), "\n")), "D")
 	assert.Equal(t, `demo · swarm · 2 installations
 
 ✔ runtime  install    1 service · 1 volume · 1 network  D
@@ -107,7 +108,7 @@ func TestLive_notRun(t *testing.T) {
 	whoami.Emit(progress.Event{Group: progress.Installation, State: progress.Pending, Message: "install"})
 	nginx.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: "install"})
 	nginx.Emit(progress.Event{Group: progress.Installation, State: progress.Error, Message: "the installer exited with code 1"})
-	frame := ansi.Strip(strings.Join(live.render(), "\n"))
+	frame := ansi.Strip(strings.Join(live.render(false), "\n"))
 	assert.Equal(t, `demo · 2 installations
 
 ✖ nginx   install    the installer exited with code 1
@@ -133,9 +134,40 @@ func TestLive_outputFirst(t *testing.T) {
 	nginx.Emit(progress.Event{Group: progress.Output, State: progress.Working, Message: "error: service web: port is already allocated"})
 	nginx.Emit(progress.Event{Group: "services", Item: "web", State: progress.Error, Message: "port is already allocated"})
 	nginx.Emit(progress.Event{Group: progress.Installation, State: progress.Error, Message: "the installer exited with code 1"})
-	frame := ansi.Strip(strings.Join(live.render(), "\n"))
+	frame := ansi.Strip(strings.Join(live.render(false), "\n"))
 	assert.Equal(t, `demo · 1 installation
 
 ✖ nginx  install    the installer exited with code 1
     ✖ web  port is already allocated`, frame, "the service's error said once, whichever of the installer's streams came first")
+}
+
+func TestLive_fitsTheTerminal(t *testing.T) {
+	t.Parallel()
+	live := &live{title: "sntns-dev"}
+	for _, name := range []string{"grafana", "traefik", "portal", "runtime"} {
+		installation := progress.About(live, "sntns-dev/"+name)
+		installation.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: "upgrade"})
+		installation.Emit(progress.Event{Group: progress.Installation, State: progress.Done, Message: "upgrade"})
+	}
+	iam := progress.About(live, "sntns-dev/iam")
+	iam.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: "upgrade"})
+	for i := range 20 {
+		state := progress.Done
+		if i%4 == 0 {
+			state = progress.Working
+		}
+		iam.Emit(progress.Event{Group: "services", Item: fmt.Sprintf("iam-%02d", i), State: state, Current: 1, Total: 1, Message: "running"})
+	}
+	text := func(lines []string) string { return ansi.Strip(strings.Join(lines, "\n")) }
+
+	assert.Len(t, live.lines(80, 40), 27, "the whole frame fits")
+	fitted := live.lines(80, 14)
+	assert.LessOrEqual(t, len(fitted), 13, "a line under the terminal's height, for the cursor")
+	assert.Contains(t, text(fitted), "iam-04", "a service at work")
+	assert.NotContains(t, text(fitted), "iam-01", "a service ready, folded")
+	assert.Contains(t, text(fitted), "15/20 services ready", "counted by its installation")
+
+	assert.Contains(t, text(live.lines(80, 8)), "more", "cut at the bottom, saying so")
+	live.ended = true
+	assert.Len(t, live.lines(80, 14), 27, "the last frame whole")
 }

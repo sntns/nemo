@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/cnabio/cnab-go/secrets/host"
 	"github.com/cnabio/cnab-go/valuesource"
+	"github.com/docker/cli/opts"
 
 	"github.com/sntns/nemo/pkg/bundle"
 	"github.com/sntns/nemo/pkg/cnab"
@@ -67,23 +68,41 @@ const (
 	screenNames
 	screenLayouts
 	screenVersion
+	screenDocker
+	screenHost
+	screenContext
 	screenOrchestrator
 	screenImages
 	screenParameter
 	screenCredential
+	screenVolume
 	screenReview
 )
 
 type screen struct {
 	kind screenKind
 	step step
-	// name is the parameter's or the credential's.
+	// name is the parameter's, the credential's or the volume type's.
 	name string
+}
+
+func credentialScreen(name string) screen {
+	return screen{kind: screenCredential, step: stepCredentials, name: name}
 }
 
 // keepRemote is the source of bundles located by a remote the editor does not
 // write: it keeps it as it is.
 const keepRemote = "remote"
+
+// How nemo reaches the target's Docker: as the environment says, at an
+// address, or through a docker context.
+const (
+	dockerEnvironment = "environment"
+	dockerHost        = "host"
+	dockerContext     = "context"
+)
+
+var dockerKinds = []string{dockerEnvironment, dockerHost, dockerContext}
 
 // editor is the interactive editor of a stack: one screen at a time, grouped
 // in steps, then a review of the whole stack that saves it.
@@ -96,6 +115,7 @@ type editor struct {
 	askName bool
 
 	from      string
+	docker    string
 	namespace string
 	directory string
 	names     string
@@ -104,7 +124,9 @@ type editor struct {
 	found     map[string]cnab.ExtendedBundle
 	chosen    map[string]bool
 	bundles   map[string]cnab.ExtendedBundle
-	kinds     map[string]string
+	// kinds are the kinds chosen on the screens of a kind and a value: a
+	// credential's source, or what a volume type is made of.
+	kinds map[screen]string
 	// loading says what is being read in the background: versions, layouts or bundles.
 	loading map[string]string
 	failure string
@@ -119,6 +141,7 @@ type editor struct {
 	quitting bool
 	spin     spinner.Model
 	width    int
+	height   int
 	saved    bool
 
 	load func(ctx context.Context, source string) (cnab.BundleReference, error)
@@ -130,8 +153,8 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 		ctx: ctx, mode: mode, stack: edited, taken: taken,
 		askName: mode != modeEdit && (edited.Name == "" || taken(edited.Name)),
 		found:   map[string]cnab.ExtendedBundle{}, chosen: map[string]bool{}, bundles: map[string]cnab.ExtendedBundle{},
-		kinds: map[string]string{}, visited: map[step]bool{}, loading: map[string]string{},
-		input: textinput.New(), spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80,
+		kinds: map[screen]string{}, visited: map[step]bool{}, loading: map[string]string{},
+		input: textinput.New(), spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80, height: 24,
 		load: nemo.LoadBundle, tags: bundle.RegistryTags{}.ListTags,
 	}
 	e.input.Prompt = "> "
@@ -148,6 +171,14 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 	default:
 		e.from = keepRemote
 	}
+	switch {
+	case edited.Target.Host != "":
+		e.docker = dockerHost
+	case edited.Target.Context != "":
+		e.docker = dockerContext
+	default:
+		e.docker = dockerEnvironment
+	}
 	var names []string
 	for _, installation := range edited.Installations {
 		names = append(names, installation.Name)
@@ -156,7 +187,7 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 	}
 	e.names = strings.Join(names, " ")
 	for _, strategy := range edited.Credentials {
-		e.kinds[strategy.Name] = strategy.Source.Key
+		e.kinds[credentialScreen(strategy.Name)] = strategy.Source.Key
 	}
 	if mode != modeCreate {
 		for _, s := range []step{stepName, stepBundles, stepTarget, stepParameters, stepCredentials} {
@@ -205,12 +236,22 @@ func (e *editor) screens() []screen {
 	default:
 		screens = append(screens, screen{kind: screenNames, step: stepBundles}, screen{kind: screenVersion, step: stepBundles})
 	}
+	screens = append(screens, screen{kind: screenDocker, step: stepTarget})
+	switch e.docker {
+	case dockerHost:
+		screens = append(screens, screen{kind: screenHost, step: stepTarget})
+	case dockerContext:
+		screens = append(screens, screen{kind: screenContext, step: stepTarget})
+	}
 	screens = append(screens, screen{kind: screenOrchestrator, step: stepTarget}, screen{kind: screenImages, step: stepTarget})
+	for _, name := range slices.Sorted(maps.Keys(e.stack.Target.Volumes)) {
+		screens = append(screens, screen{kind: screenVolume, step: stepTarget, name: name})
+	}
 	for _, name := range e.parameterNames() {
 		screens = append(screens, screen{kind: screenParameter, step: stepParameters, name: name})
 	}
 	for _, name := range e.credentialNames() {
-		screens = append(screens, screen{kind: screenCredential, step: stepCredentials, name: name})
+		screens = append(screens, credentialScreen(name))
 	}
 	return append(screens, screen{kind: screenReview, step: stepReview})
 }
@@ -324,6 +365,12 @@ func (e *editor) problems(s step) []string {
 			problems = append(problems, "the bundles are not read yet")
 		}
 	case stepTarget:
+		switch {
+		case e.docker == dockerHost && e.stack.Target.Host == "":
+			problems = append(problems, "the address of the Docker is not given")
+		case e.docker == dockerContext && e.stack.Target.Context == "":
+			problems = append(problems, "the docker context is not given")
+		}
 		if !slices.Contains([]string{target.Swarm, target.Compose}, e.stack.Target.Orchestrator) {
 			problems = append(problems, "no orchestrator")
 		}
@@ -395,6 +442,12 @@ func (e *editor) enter() {
 		value, e.input.Placeholder = e.names, "web database"
 	case screenVersion:
 		value, e.cursor = e.version, max(0, slices.Index(e.versions, e.version))
+	case screenDocker:
+		e.cursor = max(0, slices.Index(dockerKinds, e.docker))
+	case screenHost:
+		value, e.input.Placeholder = e.stack.Target.Host, "ssh://deploy@vm1"
+	case screenContext:
+		value, e.input.Placeholder = e.stack.Target.Context, "production"
 	case screenOrchestrator:
 		e.cursor = max(0, slices.Index([]string{target.Swarm, target.Compose}, e.stack.Target.Orchestrator))
 	case screenImages:
@@ -406,10 +459,16 @@ func (e *editor) enter() {
 		if strategy, given := e.strategy(screen.name); given {
 			value = strategy.Source.Value
 		}
-		if e.kinds[screen.name] == "" {
-			e.kinds[screen.name] = host.SourcePath
+		if e.kinds[screen] == "" {
+			e.kinds[screen] = host.SourcePath
 		}
-		e.echo(screen.name)
+		e.echo(screen)
+	case screenVolume:
+		kind, made := volumeKindOf(e.stack.Target.Volumes[screen.name])
+		if e.kinds[screen] == "" {
+			e.kinds[screen] = kind
+		}
+		value = made
 	case screenReview:
 		e.cursor = len(e.reviewLines()) - 1
 		for i, line := range e.reviewLines() {
@@ -517,7 +576,7 @@ func (e *editor) loadBundles() tea.Cmd {
 }
 
 // read records the bundles read, and gives the volume types they use a
-// local volume on the target, to change in the manifest for another driver.
+// local volume on the target, until the Target step makes them otherwise.
 func (e *editor) read(bundles map[string]cnab.ExtendedBundle) {
 	e.bundles = bundles
 	for _, volumeType := range volumeTypes(e.loaded()) {
@@ -533,7 +592,7 @@ func (e *editor) read(bundles map[string]cnab.ExtendedBundle) {
 func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		e.width = msg.Width
+		e.width, e.height = msg.Width, msg.Height
 		e.input.SetWidth(max(20, msg.Width-6))
 		return e, nil
 	case spinner.TickMsg:
@@ -583,13 +642,16 @@ func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // even with its source chosen.
 func (e *editor) paste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	switch screen := e.screen(); screen.kind {
-	case screenSource, screenOrchestrator, screenImages, screenLayouts, screenReview:
+	case screenSource, screenDocker, screenOrchestrator, screenImages, screenLayouts, screenReview:
 		return e, nil
 	case screenVersion:
 		if len(e.versions) > 0 {
 			return e, nil
 		}
-	case screenCredential:
+	case screenCredential, screenVolume:
+		if !e.valued(screen) {
+			return e, nil
+		}
 		e.field = 1
 	}
 	var cmd tea.Cmd
@@ -621,7 +683,7 @@ func (e *editor) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	screen := e.screen()
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages:
+	case screenSource, screenDocker, screenOrchestrator, screenImages:
 		return e.choose(key, len(e.options(screen)))
 	case screenVersion:
 		if len(e.versions) > 0 {
@@ -634,26 +696,28 @@ func (e *editor) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return e, nil
 		}
 		return e.choose(key, len(names))
-	case screenCredential:
+	case screenCredential, screenVolume:
 		switch {
 		case key == "up" || key == "down":
-			e.field = 1 - e.field
+			if e.valued(screen) {
+				e.field = 1 - e.field
+			}
 			return e, nil
 		case e.field == 0 && (key == "left" || key == "right"):
-			kinds := sourceKinds()
-			index := slices.Index(kinds, e.kinds[screen.name])
+			kinds := e.kindsOf(screen)
+			index := slices.Index(kinds, e.kinds[screen])
 			if key == "left" {
 				index = (index + len(kinds) - 1) % len(kinds)
 			} else {
 				index = (index + 1) % len(kinds)
 			}
-			e.kinds[screen.name] = kinds[index]
-			e.echo(screen.name)
+			e.kinds[screen] = kinds[index]
+			e.echo(screen)
 			return e, nil
-		case e.field == 0 && key == "enter":
+		case e.field == 0 && key == "enter" && e.valued(screen):
 			e.field = 1
 			return e, nil
-		case e.field == 0:
+		case e.field == 0 && key != "enter":
 			return e, nil
 		}
 	case screenReview:
@@ -784,6 +848,25 @@ func (e *editor) accept(value string) (tea.Cmd, error) {
 		return nil, e.setLayouts()
 	case screenVersion:
 		return e.acceptVersion(value)
+	case screenDocker:
+		e.docker = dockerKinds[e.cursor]
+		if e.docker == dockerEnvironment {
+			e.stack.Target.Host, e.stack.Target.Context = "", ""
+		}
+	case screenHost:
+		if value == "" {
+			return nil, errors.New("required")
+		}
+		host, err := opts.ParseHost(false, value)
+		if err != nil {
+			return nil, errors.New("unix://, tcp:// or ssh://user@host")
+		}
+		e.stack.Target.Host, e.stack.Target.Context = host, ""
+	case screenContext:
+		if value == "" {
+			return nil, errors.New("required")
+		}
+		e.stack.Target.Host, e.stack.Target.Context = "", value
 	case screenOrchestrator:
 		e.stack.Target.Orchestrator = []string{target.Swarm, target.Compose}[e.cursor]
 	case screenImages:
@@ -795,6 +878,12 @@ func (e *editor) accept(value string) (tea.Cmd, error) {
 		e.setParameter(screen.name, value)
 	case screenCredential:
 		return nil, e.setCredential(screen.name, value)
+	case screenVolume:
+		volumeType, err := volumeTypeOf(e.kinds[screen], value, e.stack.Target.Volumes[screen.name])
+		if err != nil {
+			return nil, err
+		}
+		e.stack.Target.Volumes[screen.name] = volumeType
 	}
 	return nil, nil
 }
@@ -907,7 +996,7 @@ func (e *editor) setCredential(name, value string) error {
 		}
 		return nil
 	}
-	strategy, err := credentials.Parse(name, e.kinds[name]+":"+value)
+	strategy, err := credentials.Parse(name, e.kinds[credentialScreen(name)]+":"+value)
 	if err != nil {
 		return err
 	}
@@ -916,11 +1005,30 @@ func (e *editor) setCredential(name, value string) error {
 }
 
 // echo hides what is typed of a credential given as its value.
-func (e *editor) echo(name string) {
+func (e *editor) echo(screen screen) {
 	e.input.EchoMode = textinput.EchoNormal
-	if e.kinds[name] == host.SourceValue {
+	if screen.kind == screenCredential && e.kinds[screen] == host.SourceValue {
 		e.input.EchoMode = textinput.EchoPassword
 	}
+}
+
+// kindsOf are the kinds a screen of a kind and a value offers: the sources
+// of a credential, or what a volume type is made of, the manifest's own
+// when the editor did not make it.
+func (e *editor) kindsOf(screen screen) []string {
+	if screen.kind == screenCredential {
+		return sourceKinds()
+	}
+	kinds := []string{volumeLocal, volumeHost, volumeNFS}
+	if kind, _ := volumeKindOf(e.stack.Target.Volumes[screen.name]); kind == volumeWritten {
+		kinds = append(kinds, volumeWritten)
+	}
+	return kinds
+}
+
+// valued says whether the kind chosen on the screen takes a value.
+func (e *editor) valued(screen screen) bool {
+	return screen.kind == screenCredential || volumeTitles[e.kinds[screen]] != ""
 }
 
 func sourceKinds() []string {
@@ -948,6 +1056,12 @@ func (e *editor) options(screen screen) []option {
 			options = append(options, option{"The manifest's remote", e.stack.Remote})
 		}
 		return options
+	case screenDocker:
+		return []option{
+			{"The environment's", "DOCKER_HOST, the current context, or the socket"},
+			{"An address", "unix://, tcp:// or ssh://user@host"},
+			{"A docker context", "one of docker context ls"},
+		}
 	case screenOrchestrator:
 		return []option{{target.Swarm, "services on a swarm, created if there is none"}, {target.Compose, "containers, as docker compose runs them"}}
 	case screenImages:
@@ -986,8 +1100,8 @@ func (e *editor) reviewLines() []reviewLine {
 	bundles := e.problems(stepBundles)
 	lines = append(lines, opening(reviewLine{label: "Bundles", value: cmp.Or(e.stack.Remote, "not given"), problem: len(bundles) > 0}, screenSource, ""))
 	for _, installation := range e.stack.Installations {
-		reference := cmp.Or(installation.Bundle.File, installation.Bundle.Repository, "")
-		lines = append(lines, reviewLine{label: installation.Name, value: strings.TrimSpace(reference + " " + installation.Bundle.Version), indent: true})
+		reference := strings.TrimSpace(cmp.Or(installation.Bundle.File, installation.Bundle.Repository, "") + " " + installation.Bundle.Version)
+		lines = append(lines, reviewLine{label: installation.Name, value: strings.Join(slices.Concat([]string{reference}, ownValues(installation)), " · "), indent: true})
 	}
 	if loading := cmp.Or(e.loading["bundles"], e.loading["layouts"]); loading != "" {
 		lines = append(lines, reviewLine{label: e.spin.View() + " " + loading, indent: true})
@@ -1005,9 +1119,9 @@ func (e *editor) reviewLines() []reviewLine {
 	lines = append(lines, opening(reviewLine{
 		label: "Target", value: cmp.Or(e.stack.Target.Orchestrator, "no orchestrator") + " · images " + cmp.Or(e.stack.Target.Images, target.ImagesRegistry) + " · " + docker,
 		problem: len(e.problems(stepTarget)) > 0,
-	}, screenOrchestrator, ""))
+	}, screenDocker, ""))
 	for _, volumeType := range slices.Sorted(maps.Keys(e.stack.Target.Volumes)) {
-		lines = append(lines, reviewLine{label: "volume " + volumeType, value: cmp.Or(e.stack.Target.Volumes[volumeType].Driver, "local"), indent: true})
+		lines = append(lines, opening(reviewLine{label: "volume " + volumeType, value: volumeSummary(e.stack.Target.Volumes[volumeType]), indent: true}, screenVolume, volumeType))
 	}
 	if names := e.parameterNames(); len(names) > 0 {
 		lines = append(lines, reviewLine{label: "Parameters"})
@@ -1029,10 +1143,7 @@ func (e *editor) reviewLines() []reviewLine {
 			_, required := e.credential(name)
 			value, missing := "not given", required
 			if strategy, given := e.strategy(name); given {
-				value, missing = strategy.Source.Key+" "+strategy.Source.Value, false
-				if strategy.Source.Key == host.SourceValue {
-					value = host.SourceValue + " " + strings.Repeat("•", 8)
-				}
+				value, missing = sourceSummary(strategy), false
 			} else if required {
 				value = "required, missing"
 			}
@@ -1043,28 +1154,56 @@ func (e *editor) reviewLines() []reviewLine {
 	return append(lines, reviewLine{label: verb + " " + cmp.Or(e.stack.Name, "the stack"), save: true})
 }
 
+// ownValues are the values an installation has of its own, over the
+// stack's: the manifest gives them, the editor shows them.
+func ownValues(installation storage.InstallationSpec) []string {
+	var values []string
+	for _, name := range slices.Sorted(maps.Keys(installation.Parameters)) {
+		values = append(values, name+" "+installation.Parameters[name])
+	}
+	for _, strategy := range installation.Credentials {
+		values = append(values, strategy.Name+" "+sourceSummary(strategy))
+	}
+	return values
+}
+
+// sourceSummary is where a credential is read from, its value hidden.
+func sourceSummary(strategy valuesource.Strategy) string {
+	if strategy.Source.Key == host.SourceValue {
+		return host.SourceValue + " " + strings.Repeat("•", 8)
+	}
+	return strategy.Source.Key + " " + strategy.Source.Value
+}
+
 var (
 	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	title  = lipgloss.NewStyle().Bold(true)
 )
 
+// View draws the screen to the terminal's height: a body longer than the
+// room left shows the lines around its cursor.
 func (e *editor) View() tea.View {
-	var out strings.Builder
-	fmt.Fprintf(&out, " %s%s\n", bold.Render("nemo"), faint.Render(" · stack "+cmp.Or(e.stack.Name, "new")))
-	out.WriteString(" " + e.stepBar() + "\n\n")
+	var top strings.Builder
+	fmt.Fprintf(&top, " %s%s\n", bold.Render("nemo"), faint.Render(" · stack "+cmp.Or(e.stack.Name, "new")))
+	top.WriteString(" " + e.stepBar() + "\n\n")
 
 	screen := e.screen()
 	heading, description := e.heading(screen)
-	out.WriteString(" " + title.Render(heading) + "\n")
+	top.WriteString(" " + title.Render(heading) + "\n")
 	if description != "" {
-		out.WriteString(lipgloss.NewStyle().Width(max(20, e.width-2)).PaddingLeft(1).Render(faint.Render(description)) + "\n")
+		top.WriteString(lipgloss.NewStyle().Width(max(20, e.width-2)).PaddingLeft(1).Render(faint.Render(description)) + "\n")
 	}
-	out.WriteString("\n" + e.body(screen) + "\n")
+	top.WriteString("\n")
+
+	bottom := "\n"
 	if e.problem != "" {
-		out.WriteString("\n " + red.Render("! "+e.problem) + "\n")
+		bottom += "\n " + red.Render("! "+e.problem) + "\n"
 	}
-	out.WriteString("\n " + faint.Render(e.help(screen)) + "\n")
-	view := tea.NewView(out.String())
+	bottom += "\n " + faint.Render(e.help(screen)) + "\n"
+
+	lines, row := e.body(screen)
+	room := e.height - strings.Count(top.String(), "\n") - strings.Count(bottom, "\n")
+	view := tea.NewView(top.String() + strings.Join(window(lines, row, room), "\n") + bottom)
 	view.AltScreen = true
 	return view
 }
@@ -1126,6 +1265,18 @@ func (e *editor) heading(screen screen) (string, string) {
 		return "Bundles to install", "those the directory holds"
 	case screenVersion:
 		return "Version of the bundles", strings.Join(installationNames(e.stack.Installations), " ")
+	case screenDocker:
+		return "Which Docker is the target?", "everything nemo deploys goes through it"
+	case screenHost:
+		return "Address of the target's Docker", "unix://, tcp:// or ssh://user@host"
+	case screenContext:
+		return "Docker context of the target", "a context of docker context ls"
+	case screenVolume:
+		var kinds []string
+		for _, kind := range e.kindsOf(screen) {
+			kinds = append(kinds, kind+": "+volumeKindTitles[kind])
+		}
+		return "Volume type " + screen.name, strings.Join(kinds, " · ")
 	case screenOrchestrator:
 		return "Orchestrator", ""
 	case screenImages:
@@ -1160,20 +1311,21 @@ func installationNames(installations []storage.InstallationSpec) []string {
 	return names
 }
 
-func (e *editor) body(screen screen) string {
+// body returns the lines of the screen's body, and the row of its cursor.
+func (e *editor) body(screen screen) ([]string, int) {
 	if loading := e.loading[map[screenKind]string{screenLayouts: "layouts", screenVersion: "versions", screenParameter: "bundles", screenCredential: "bundles"}[screen.kind]]; loading != "" {
-		return " " + e.spin.View() + " " + loading
+		return []string{" " + e.spin.View() + " " + loading}, 0
 	}
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages:
+	case screenSource, screenDocker, screenOrchestrator, screenImages:
 		var lines []string
 		for i, option := range e.options(screen) {
 			lines = append(lines, e.optionLine(i, fmt.Sprintf("%-28s", option.label)+faint.Render(option.help)))
 		}
-		return strings.Join(lines, "\n")
+		return lines, e.cursor
 	case screenLayouts:
 		if e.failure != "" && len(e.found) == 0 {
-			return " " + red.Render(e.failure)
+			return []string{" " + red.Render(e.failure)}, 0
 		}
 		var lines []string
 		for i, name := range slices.Sorted(maps.Keys(e.found)) {
@@ -1183,20 +1335,20 @@ func (e *editor) body(screen screen) string {
 			}
 			lines = append(lines, e.optionLine(i, check+" "+name+" "+faint.Render(e.found[name].Version)))
 		}
-		return strings.Join(lines, "\n")
+		return lines, e.cursor
 	case screenVersion:
 		if len(e.versions) == 0 {
-			return " " + e.input.View()
+			return []string{" " + e.input.View()}, 0
 		}
 		var lines []string
-		for i, version := range e.versions[:min(len(e.versions), 10)] {
+		for i, version := range e.versions {
 			lines = append(lines, e.optionLine(i, version))
 		}
-		return strings.Join(lines, "\n")
-	case screenCredential:
+		return lines, e.cursor
+	case screenCredential, screenVolume:
 		var kinds []string
-		for _, kind := range sourceKinds() {
-			if kind == e.kinds[screen.name] {
+		for _, kind := range e.kindsOf(screen) {
+			if kind == e.kinds[screen] {
 				kind = accent.Render("[ " + kind + " ]")
 			} else {
 				kind = faint.Render("  " + kind + "  ")
@@ -1213,11 +1365,19 @@ func (e *editor) body(screen screen) string {
 		if e.field == 0 {
 			input = faint.Render("  " + cmp.Or(e.input.Value(), "…"))
 		}
-		return fmt.Sprintf(" %s Source    %s\n %s %-9s %s", marker(0), strings.Join(kinds, ""), marker(1), sourceTitles[e.kinds[screen.name]], input)
+		label, titles := "Source", sourceTitles
+		if screen.kind == screenVolume {
+			label, titles = "Volumes", volumeTitles
+		}
+		lines := []string{fmt.Sprintf(" %s %-9s %s", marker(0), label, strings.Join(kinds, ""))}
+		if e.valued(screen) {
+			lines = append(lines, fmt.Sprintf(" %s %-9s %s", marker(1), titles[e.kinds[screen]], input))
+		}
+		return lines, e.field
 	case screenReview:
 		return e.review()
 	}
-	return " " + e.input.View()
+	return []string{" " + e.input.View()}, 0
 }
 
 func (e *editor) optionLine(index int, text string) string {
@@ -1227,8 +1387,9 @@ func (e *editor) optionLine(index int, text string) string {
 	return "   " + text
 }
 
-func (e *editor) review() string {
+func (e *editor) review() ([]string, int) {
 	var lines []string
+	row := 0
 	for i, line := range e.reviewLines() {
 		cursor, mark := "  ", "  "
 		if i == e.cursor {
@@ -1256,9 +1417,12 @@ func (e *editor) review() string {
 		if line.problem {
 			value = red.Render(value)
 		}
+		if i == e.cursor {
+			row = len(lines)
+		}
 		lines = append(lines, " "+cursor+mark+label+" "+value)
 	}
-	return strings.Join(lines, "\n")
+	return lines, row
 }
 
 func (e *editor) help(screen screen) string {
@@ -1267,7 +1431,7 @@ func (e *editor) help(screen screen) string {
 	}
 	back := " · shift+tab back · esc quit"
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages, screenVersion:
+	case screenSource, screenDocker, screenOrchestrator, screenImages, screenVersion:
 		if screen.kind == screenVersion && len(e.versions) == 0 {
 			break
 		}
@@ -1276,6 +1440,11 @@ func (e *editor) help(screen screen) string {
 		return "↑/↓ move · space choose · enter next" + back
 	case screenCredential:
 		return "←/→ source · ↑/↓ source or value · enter next" + back
+	case screenVolume:
+		if !e.valued(screen) {
+			return "←/→ kind · enter next" + back
+		}
+		return "←/→ kind · ↑/↓ kind or value · enter next" + back
 	case screenReview:
 		return "↑/↓ move · enter opens a line, or saves on the last · esc quit"
 	}

@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/cnabio/cnab-go/bundle"
 	"github.com/cnabio/cnab-go/bundle/definition"
 	"github.com/cnabio/cnab-go/valuesource"
@@ -104,7 +107,7 @@ func TestEditor_createFromARegistry(t *testing.T) {
 	press(e, "web db", "enter")
 	require.Equal(t, screenVersion, e.screen().kind)
 	assert.Equal(t, []string{"1.1.0", "1.0.0"}, e.versions, "the versions, newest first, tags that are not aside")
-	press(e, "enter", "enter", "enter")
+	press(e, "enter", "enter", "enter", "enter")
 	require.Equal(t, screen{kind: screenParameter, step: stepParameters, name: "region"}, e.screen(), "the bundles declare it")
 	press(e, "enter")
 	assert.Equal(t, "required", e.problem)
@@ -191,4 +194,81 @@ func TestEditor_quitAsks(t *testing.T) {
 	require.NotNil(t, cmd)
 	assert.IsType(t, tea.QuitMsg{}, cmd())
 	assert.False(t, e.saved)
+}
+
+func TestEditor_targetDocker(t *testing.T) {
+	t.Parallel()
+	imported := stack.Stack{
+		Name:          "shop",
+		Remote:        "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}",
+		Target:        target.Target{Orchestrator: target.Swarm},
+		Parameters:    map[string]string{"region": "eu5"},
+		Credentials:   []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "env", Value: "TOKEN"}}},
+		Installations: []storage.InstallationSpec{{Name: "web", Stack: "shop", Bundle: storage.BundleReference{Version: "1.1.0"}}},
+	}
+	e := shopEditor(imported, modeEdit, true)
+	drain(e, e.Init())
+	e.at, e.reviewed = screen{kind: screenDocker, step: stepTarget}, true
+	e.enter()
+
+	press(e, "down", "enter")
+	require.Equal(t, screenHost, e.screen().kind, "an address is asked")
+	press(e, "ftp://vm1", "enter")
+	assert.Equal(t, "unix://, tcp:// or ssh://user@host", e.problem)
+	press(e, "shift+tab", "enter", "ssh://deploy@vm1", "enter")
+	assert.Equal(t, "ssh://deploy@vm1", e.stack.Target.Host)
+
+	e.at = screen{kind: screenDocker, step: stepTarget}
+	e.enter()
+	assert.Equal(t, 1, e.cursor, "on the address the manifest gives")
+	press(e, "down", "enter", "production", "enter")
+	assert.Equal(t, target.Configuration{Context: "production"}, e.stack.Target.Configuration, "a context instead of the address")
+}
+
+func TestEditor_reviewFitsTheTerminal(t *testing.T) {
+	t.Parallel()
+	imported := stack.Stack{
+		Name:       "shop",
+		Remote:     "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}",
+		Target:     target.Target{Orchestrator: target.Swarm},
+		Parameters: map[string]string{"region": "eu5"},
+	}
+	for _, name := range []string{"web", "db"} {
+		imported.Installations = append(imported.Installations, storage.InstallationSpec{Name: name, Stack: "shop", Bundle: storage.BundleReference{Version: "1.1.0"}})
+	}
+	imported.Credentials = []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "env", Value: "TOKEN"}}}
+	e := shopEditor(imported, modeEdit, true)
+	drain(e, e.Init())
+	e.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	require.Equal(t, screenReview, e.screen().kind)
+
+	rows := func() []string { return strings.Split(ansi.Strip(e.View().Content), "\n") }
+	assert.Len(t, rows(), 14, "as high as the terminal")
+	assert.Contains(t, strings.Join(rows(), "\n"), "Save shop", "the cursor's line, saving")
+	assert.Contains(t, strings.Join(rows(), "\n"), "more", "says what it leaves out")
+
+	press(e, "up", "up", "up", "up", "up")
+	assert.Contains(t, strings.Join(rows(), "\n"), "Bundles", "follows the cursor")
+	assert.Len(t, rows(), 14)
+}
+
+func TestEditor_reviewShowsTheInstallationsValues(t *testing.T) {
+	t.Parallel()
+	imported := stack.Stack{
+		Name:       "shop",
+		Remote:     "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}",
+		Target:     target.Target{Orchestrator: target.Swarm},
+		Parameters: map[string]string{"region": "eu5"},
+		Installations: []storage.InstallationSpec{{
+			Name: "web", Stack: "shop", Bundle: storage.BundleReference{Version: "1.1.0"},
+			Parameters:  map[string]string{"region": "eu6"},
+			Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "value", Value: "secret"}}},
+		}},
+	}
+	e := shopEditor(imported, modeEdit, true)
+	drain(e, e.Init())
+	lines := e.reviewLines()
+	index := slices.IndexFunc(lines, func(line reviewLine) bool { return line.label == "web" })
+	require.GreaterOrEqual(t, index, 0)
+	assert.Equal(t, "1.1.0 · region eu6 · token value ••••••••", lines[index].value, "over the stack's, the value hidden")
 }
