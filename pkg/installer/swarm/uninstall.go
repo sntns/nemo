@@ -77,79 +77,118 @@ func (orchestrator *Orchestrator) delete(ctx context.Context, found objects, eve
 // name.
 func (orchestrator *Orchestrator) declared(ctx context.Context, project *installer.Project, specs *projectSpecs, volumes bool, events progress.Sink) (objects, error) {
 	var found objects
-	kept := func(group, kind, name string, want map[string]string) {
-		events.Emit(progress.Event{Group: group, Item: name, State: progress.Warning, Message: "kept: " + docker.NotOwned(kind, name, want).Error()})
+	var err error
+	if found.services, err = orchestrator.declaredServices(ctx, project, specs, events); err != nil {
+		return found, err
 	}
+	if found.configs, err = orchestrator.declaredConfigs(ctx, project); err != nil {
+		return found, err
+	}
+	if found.secrets, err = orchestrator.declaredSecrets(ctx, project); err != nil {
+		return found, err
+	}
+	if found.networks, err = orchestrator.declaredNetworks(ctx, project, specs, events); err != nil {
+		return found, err
+	}
+	if volumes {
+		found.volumes, err = orchestrator.declaredVolumes(ctx, project, specs, events)
+	}
+	return found, err
+}
 
+// ours tells whether an object found by its name has the labels wanted: one
+// that does not is kept, with a warning.
+func ours(events progress.Sink, group, kind, name string, have, want map[string]string) bool {
+	if docker.Owns(have, want) {
+		return true
+	}
+	events.Emit(progress.Event{Group: group, Item: name, State: progress.Warning, Message: "kept: " + docker.NotOwned(kind, name, want).Error()})
+	return false
+}
+
+func (orchestrator *Orchestrator) declaredServices(ctx context.Context, project *installer.Project, specs *projectSpecs, events progress.Sink) ([]swarm.Service, error) {
 	want := installationLabels(project.Installation)
+	var found []swarm.Service
 	for _, name := range slices.Sorted(maps.Keys(specs.services)) {
 		spec := specs.services[name]
 		existing, err := orchestrator.docker.ServiceFind(ctx, spec.Name)
-		switch {
-		case err != nil:
-			return found, err
-		case existing == nil:
-		case !docker.Owns(existing.Spec.Labels, want):
-			kept("services", "service", spec.Name, want)
-		default:
-			found.services = append(found.services, *existing)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && ours(events, "services", "service", spec.Name, existing.Spec.Labels, want) {
+			found = append(found, *existing)
 		}
 	}
+	return found, nil
+}
 
+func (orchestrator *Orchestrator) declaredConfigs(ctx context.Context, project *installer.Project) ([]swarm.Config, error) {
+	want := installationLabels(project.Installation)
+	var found []swarm.Config
 	for _, key := range slices.Sorted(maps.Keys(project.Compose.Configs)) {
-		if config := project.Compose.Configs[key]; !bool(config.External) {
-			configs, err := orchestrator.docker.ConfigList(ctx, docker.ByName(config.Name+"-"))
-			if err != nil {
-				return found, err
-			}
-			for _, existing := range configs {
-				if docker.Owns(existing.Spec.Labels, labels.Merge(want, map[string]string{labels.Config: key})) {
-					found.configs = append(found.configs, existing)
-				}
+		config := project.Compose.Configs[key]
+		if config.External {
+			continue
+		}
+		configs, err := orchestrator.docker.ConfigList(ctx, docker.ByName(config.Name+"-"))
+		if err != nil {
+			return nil, err
+		}
+		for _, existing := range configs {
+			if docker.Owns(existing.Spec.Labels, labels.Merge(want, map[string]string{labels.Config: key})) {
+				found = append(found, existing)
 			}
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(project.Compose.Secrets)) {
-		if secret := project.Compose.Secrets[key]; !bool(secret.External) {
-			secrets, err := orchestrator.docker.SecretList(ctx, docker.ByName(secret.Name+"-"))
-			if err != nil {
-				return found, err
-			}
-			for _, existing := range secrets {
-				if docker.Owns(existing.Spec.Labels, labels.Merge(want, map[string]string{labels.Secret: key})) {
-					found.secrets = append(found.secrets, existing)
-				}
-			}
-		}
-	}
+	return found, nil
+}
 
-	want = stackLabels(project.Installation)
+func (orchestrator *Orchestrator) declaredSecrets(ctx context.Context, project *installer.Project) ([]swarm.Secret, error) {
+	want := installationLabels(project.Installation)
+	var found []swarm.Secret
+	for _, key := range slices.Sorted(maps.Keys(project.Compose.Secrets)) {
+		secret := project.Compose.Secrets[key]
+		if secret.External {
+			continue
+		}
+		secrets, err := orchestrator.docker.SecretList(ctx, docker.ByName(secret.Name+"-"))
+		if err != nil {
+			return nil, err
+		}
+		for _, existing := range secrets {
+			if docker.Owns(existing.Spec.Labels, labels.Merge(want, map[string]string{labels.Secret: key})) {
+				found = append(found, existing)
+			}
+		}
+	}
+	return found, nil
+}
+
+func (orchestrator *Orchestrator) declaredNetworks(ctx context.Context, project *installer.Project, specs *projectSpecs, events progress.Sink) ([]network.Summary, error) {
+	want := stackLabels(project.Installation)
+	var found []network.Summary
 	for _, spec := range specs.networks {
 		existing, err := orchestrator.docker.NetworkFind(ctx, spec.Name)
-		switch {
-		case err != nil:
-			return found, err
-		case existing == nil:
-		case !docker.Owns(existing.Labels, want):
-			kept("networks", "network", spec.Name, want)
-		default:
-			found.networks = append(found.networks, *existing)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && ours(events, "networks", "network", spec.Name, existing.Labels, want) {
+			found = append(found, *existing)
 		}
 	}
-	if !volumes {
-		return found, nil
-	}
+	return found, nil
+}
+
+func (orchestrator *Orchestrator) declaredVolumes(ctx context.Context, project *installer.Project, specs *projectSpecs, events progress.Sink) ([]*volume.Volume, error) {
 	owner := installer.VolumeOwner(project.Installation)
+	var found []*volume.Volume
 	for _, spec := range specs.volumes {
 		existing, err := orchestrator.docker.VolumeFind(ctx, spec.Name)
-		switch {
-		case err != nil:
-			return found, err
-		case existing == nil:
-		case !docker.Owns(existing.Labels, owner):
-			kept("volumes", "volume", spec.Name, owner)
-		default:
-			found.volumes = append(found.volumes, existing)
+		if err != nil {
+			return nil, err
+		}
+		if existing != nil && ours(events, "volumes", "volume", spec.Name, existing.Labels, owner) {
+			found = append(found, existing)
 		}
 	}
 	return found, nil
@@ -158,9 +197,6 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 // deleteServices deletes the services, and waits until their containers
 // are gone: each service is stopping until then, and removed once none of
 // its containers is left.
-//
-// Swarm removes the containers of the tasks after the service, and they keep networks and volumes
-// in use until then. It never removes those of tasks lost in a daemon crash: they are removed here.
 func (orchestrator *Orchestrator) deleteServices(ctx context.Context, services []swarm.Service, events progress.Sink) error {
 	stopping := map[string]string{}
 	for _, service := range services {
@@ -170,33 +206,21 @@ func (orchestrator *Orchestrator) deleteServices(ctx context.Context, services [
 		stopping[service.ID] = service.Spec.Labels[labels.Service]
 		events.Emit(progress.Event{Group: "services", Item: service.Spec.Labels[labels.Service], State: progress.Working, Message: "stopping"})
 	}
+	return orchestrator.waitServicesGone(ctx, stopping, events)
+}
 
-	if len(stopping) == 0 {
-		return nil
-	}
-	for {
-		containers, err := orchestrator.docker.ContainerList(ctx, client.Filters{}.Add("label", serviceIDLabel))
+// waitServicesGone waits until no container of the services stopping, by
+// ID, is left. Swarm removes the containers of the tasks after the service,
+// and they keep networks and volumes in use until then. It never removes
+// those of tasks lost in a daemon crash: leftContainers removes them.
+func (orchestrator *Orchestrator) waitServicesGone(ctx context.Context, stopping map[string]string, events progress.Sink) error {
+	for len(stopping) > 0 {
+		left, err := orchestrator.leftContainers(ctx, stopping)
 		if err != nil {
 			return err
 		}
-		var left []string
-		running := map[string]bool{}
-		for _, summary := range containers {
-			id := summary.Labels[serviceIDLabel]
-			if _, ours := stopping[id]; !ours {
-				continue
-			}
-			switch summary.State {
-			case container.StateDead:
-				continue
-			case container.StateExited, container.StateCreated:
-				_ = orchestrator.docker.ContainerDelete(ctx, summary.ID)
-			}
-			left = append(left, summary.ID[:12])
-			running[id] = true
-		}
 		for id, name := range stopping {
-			if !running[id] {
+			if _, still := left[id]; !still {
 				events.Emit(progress.Event{Group: "services", Item: name, State: progress.Done, Message: "removed"})
 				delete(stopping, id)
 			}
@@ -206,10 +230,33 @@ func (orchestrator *Orchestrator) deleteServices(ctx context.Context, services [
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("containers still there: %s: %w", strings.Join(left, ", "), ctx.Err())
+			return fmt.Errorf("containers still there: %s: %w", strings.Join(slices.Concat(slices.Collect(maps.Values(left))...), ", "), ctx.Err())
 		case <-time.After(time.Second):
 		}
 	}
+	return nil
+}
+
+// leftContainers returns the short IDs of the containers left of each
+// service stopping, by service ID, and removes those that stopped. A dead
+// container is not counted: the daemon cannot remove it.
+func (orchestrator *Orchestrator) leftContainers(ctx context.Context, stopping map[string]string) (map[string][]string, error) {
+	containers, err := orchestrator.docker.ContainerList(ctx, client.Filters{}.Add("label", serviceIDLabel))
+	if err != nil {
+		return nil, err
+	}
+	left := map[string][]string{}
+	for _, summary := range containers {
+		id := summary.Labels[serviceIDLabel]
+		if _, waited := stopping[id]; !waited || summary.State == container.StateDead {
+			continue
+		}
+		if summary.State == container.StateExited || summary.State == container.StateCreated {
+			_ = orchestrator.docker.ContainerDelete(ctx, summary.ID)
+		}
+		left[id] = append(left[id], summary.ID[:12])
+	}
+	return left, nil
 }
 
 // deleteConfigs deletes the configs. One a service still uses is kept, with
