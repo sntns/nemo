@@ -20,8 +20,9 @@ test: ## Run the tests
 
 integration: ## Run the integration bench on the Docker of DOCKER_HOST, a swarm manager: it creates and removes objects there
 	mkdir -p bin
-	go test -tags integration -count=1 -timeout 45m -coverpkg=./pkg/... -coverprofile=bin/integration.cover ./test/...
-	go tool cover -func=bin/integration.cover | tail -1
+	NEMO_E2E_COVERAGE=$(CURDIR)/bin/e2e.cover go test -tags integration -count=1 -timeout 45m -coverpkg=./pkg/... -coverprofile=bin/integration.cover ./test/...
+	@echo "the orchestrators:" && go tool cover -func=bin/integration.cover | tail -1
+	@echo "nemo, end to end:" && go tool cover -func=bin/e2e.cover | tail -1
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...

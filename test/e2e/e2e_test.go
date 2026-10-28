@@ -7,6 +7,7 @@ package e2e
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -32,6 +33,10 @@ import (
 // work holds nemo, gill and the bundles, built once for every test.
 var work string
 
+// registry is the address of a registry the bench runs, holding the bundles
+// of the stack that works: localhost:PORT.
+var registry string
+
 // bundles are the fixture bundles of a stack that works, each requiring the
 // one before it.
 var bundles = []string{"broker", "api", "web"}
@@ -47,14 +52,57 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	work = directory
-	code := 1
+	os.Exit(run(m))
+}
+
+func run(m *testing.M) int {
+	defer os.RemoveAll(work)
+	stop, err := startRegistry()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "starting a registry:", err)
+		return 1
+	}
+	defer stop()
 	if err := build(); err != nil {
 		fmt.Fprintln(os.Stderr, "building nemo, gill and the bundles:", err)
-	} else {
-		code = m.Run()
+		return 1
 	}
-	os.RemoveAll(work)
-	os.Exit(code)
+	code := m.Run()
+	if err := coverage(); err != nil {
+		fmt.Fprintln(os.Stderr, "writing the coverage of nemo:", err)
+	}
+	return code
+}
+
+// startRegistry runs a registry on a free port of the loopback, which nemo
+// pushes to and the daemon pulls from without TLS, as 127.0.0.1: localhost
+// may resolve to ::1, where the port is not published.
+func startRegistry() (func(), error) {
+	suffix := make([]byte, 3)
+	_, _ = rand.Read(suffix)
+	name := "nemo-e2e-registry-" + hex.EncodeToString(suffix)
+	if output, err := exec.Command("docker", "run", "-d", "--rm", "--name", name, "-p", "127.0.0.1::5000", "registry:2").CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("%w: %s", err, output)
+	}
+	stop := func() { _ = exec.Command("docker", "rm", "-f", name).Run() }
+	port, err := exec.Command("docker", "port", name, "5000").Output()
+	if err != nil {
+		stop()
+		return nil, err
+	}
+	first := strings.TrimSpace(strings.Split(string(port), "\n")[0])
+	number := first[strings.LastIndex(first, ":")+1:]
+	registry = "127.0.0.1:" + number
+	return stop, nil
+}
+
+// coverage writes what the runs of nemo covered to NEMO_E2E_COVERAGE, when set.
+func coverage() error {
+	profile := os.Getenv("NEMO_E2E_COVERAGE")
+	if profile == "" {
+		return nil
+	}
+	return exec.Command("go", "tool", "covdata", "textfmt", "-i", filepath.Join(work, "cover"), "-o", profile).Run()
 }
 
 func build() error {
@@ -71,8 +119,11 @@ func build() error {
 	if err := os.WriteFile(filepath.Join(busybox, "Dockerfile"), []byte("FROM busybox:1.37\n"), 0o644); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Join(work, "cover"), 0o755); err != nil {
+		return err
+	}
 	steps := [][]string{
-		{"go", "build", "-o", filepath.Join(work, "nemo"), "./cmd/nemo"},
+		{"go", "build", "-cover", "-coverpkg=./pkg/...,./cmd/nemo", "-o", filepath.Join(work, "nemo"), "./cmd/nemo"},
 		{"docker", "buildx", "build", "-f", "build/gill/Dockerfile", "--provenance=false", "--output", "type=oci,dest=" + filepath.Join(work, "gill.oci") + ",tar=false", "."},
 		{"docker", "buildx", "build", "--provenance=false", "--output", "type=oci,dest=" + filepath.Join(work, "busybox.oci") + ",tar=false", busybox},
 	}
@@ -86,9 +137,17 @@ func build() error {
 			"-o", "oci:" + filepath.Join(work, "bundles", bundle+".oci"),
 		})
 	}
+	for _, bundle := range bundles {
+		steps = append(steps, []string{
+			filepath.Join(work, "nemo"), "bundle", "copy",
+			"oci:" + filepath.Join(work, "bundles", bundle+".oci"),
+			"docker://" + registry + "/bench/" + bundle + ":0.0.1",
+		})
+	}
 	for _, step := range steps {
 		command := exec.Command(step[0], step[1:]...)
 		command.Dir = tree
+		command.Env = append(os.Environ(), "GOCOVERDIR="+filepath.Join(work, "cover"))
 		if output, err := command.CombinedOutput(); err != nil {
 			return fmt.Errorf("%s: %w\n%s", strings.Join(step, " "), err, output)
 		}
@@ -102,6 +161,10 @@ type stack struct {
 	name string
 	home string
 	api  client.APIClient
+
+	// after runs once the stack is down: it removes what a test left
+	// outside of it.
+	after []func()
 }
 
 func newStack(t *testing.T) *stack {
@@ -115,6 +178,9 @@ func newStack(t *testing.T) *stack {
 		defer api.Close()
 		_, _ = s.nemo("down", "--purge")
 		s.assertNothingLeft()
+		for _, after := range slices.Backward(s.after) {
+			after()
+		}
 	})
 	return s
 }
@@ -125,7 +191,7 @@ func (s *stack) nemo(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.t.Context()), 10*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, filepath.Join(work, "nemo"), args...)
-	command.Env = append(os.Environ(), "NEMO_HOME="+s.home, "NO_COLOR=1")
+	command.Env = append(os.Environ(), "NEMO_HOME="+s.home, "NO_COLOR=1", "GOCOVERDIR="+filepath.Join(work, "cover"))
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	err := command.Run()
@@ -135,16 +201,30 @@ func (s *stack) nemo(args ...string) (string, error) {
 	return output.String(), err
 }
 
+// from is where a stack takes its bundles and their images, and the volume
+// types of its target; empty, the bundles' layouts, loaded, and plain volumes.
+type from struct {
+	remote string
+	images string
+	// volumes is the YAML of the target's volume types, indented under volumes.
+	volumes string
+}
+
 // importManifest imports a stack of the fixture bundles on the orchestrator.
 func (s *stack) importManifest(orchestrator string, port int, installations ...string) {
+	s.t.Helper()
+	s.importManifestFrom(from{}, orchestrator, port, installations...)
+}
+
+func (s *stack) importManifestFrom(where from, orchestrator string, port int, installations ...string) {
 	s.t.Helper()
 	manifest := fmt.Sprintf(`name: %s
 target:
   orchestrator: %s
   configuration:
-    images: load
+    images: %s
     volumes:
-      data: {}
+%s
 parameters:
   region: e2e
   web-port: "%d"
@@ -153,13 +233,14 @@ credentials:
     source:
       value: s3cret
 installations:
-`, s.name, orchestrator, port)
+`, s.name, orchestrator, cmp.Or(where.images, "load"), cmp.Or(where.volumes, "      data: {}"), port)
 	for _, installation := range installations {
 		manifest += fmt.Sprintf("  - name: %s\n    bundle:\n      version: 0.0.1\n", installation)
 	}
 	path := filepath.Join(s.t.TempDir(), "stack.yaml")
 	require.NoError(s.t, os.WriteFile(path, []byte(manifest), 0o644))
-	_, err := s.nemo("stack", "import", path, "--remote", "oci:"+filepath.Join(work, "bundles", "{{ .Component }}.oci"), "--yes")
+	remote := cmp.Or(where.remote, "oci:"+filepath.Join(work, "bundles", "{{ .Component }}.oci"))
+	_, err := s.nemo("stack", "import", path, "--remote", remote, "--yes")
 	require.NoError(s.t, err)
 }
 
@@ -334,6 +415,89 @@ func TestStack_upgradesTheBundlesAParameterChangeReaches(t *testing.T) {
 					assert.Equal(c, "served", body)
 				}
 			}, 30*time.Second, time.Second, "web serves on its new port")
+		})
+	}
+}
+
+// served waits until web serves its page on the port.
+func served(t *testing.T, port int) {
+	t.Helper()
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		status, body, err := get(t, port)
+		if assert.NoError(c, err) {
+			assert.Equal(c, http.StatusOK, status)
+			assert.Equal(c, "served", body)
+		}
+	}, 30*time.Second, time.Second, "web serves its page")
+}
+
+// The stack's bundles come from a registry, as a release's do: nemo pulls
+// each by its tag, and the target pulls their images, which nemo bundle copy
+// put next to them, by digest.
+func TestStack_fromARegistry(t *testing.T) {
+	if os, _ := exec.Command("docker", "info", "--format", "{{.OperatingSystem}}").Output(); strings.TrimSpace(string(os)) == "Docker Desktop" {
+		t.Skip("Docker Desktop's daemon runs in a machine of its own, whose loopback does not reach a published port: the CI runs it")
+	}
+	for _, orchestrator := range []string{"compose", "swarm"} {
+		t.Run(orchestrator, func(t *testing.T) {
+			s := newStack(t)
+			port := freePort(t)
+			s.importManifestFrom(from{remote: "docker://" + registry + "/bench/{{ .Component }}:{{ .Version }}", images: "registry"}, orchestrator, port, bundles...)
+
+			_, err := s.nemo("up")
+			require.NoError(t, err)
+			served(t, port)
+
+			containers, err := s.api.ContainerList(t.Context(), client.ContainerListOptions{Filters: s.byStack()})
+			require.NoError(t, err)
+			require.NotEmpty(t, containers.Items)
+			for _, summary := range containers.Items {
+				assert.True(t, strings.HasPrefix(summary.Image, registry+"/bench/"), "%s runs %s, pulled from the registry", summary.Names[0], summary.Image)
+			}
+		})
+	}
+}
+
+// storage mounts /tmp in a volume, as the volume type does, and runs the
+// shell command there. Docker Desktop binds the volume to the /tmp it shares
+// with the machine nemo runs on, the same for every volume it creates.
+func storage(t *testing.T, command string) (string, error) {
+	t.Helper()
+	suffix := make([]byte, 3)
+	_, _ = rand.Read(suffix)
+	volume := "nemo-e2e-storage-" + hex.EncodeToString(suffix)
+	if output, err := exec.Command("docker", "volume", "create", "--driver", "local", "--opt", "type=none", "--opt", "o=bind", "--opt", "device=/tmp", volume).CombinedOutput(); err != nil {
+		return string(output), err
+	}
+	defer func() { _ = exec.Command("docker", "volume", "rm", volume).Run() }()
+	output, err := exec.Command("docker", "run", "--rm", "-v", volume+":/storage", "busybox:1.37", "sh", "-c", command).CombinedOutput()
+	return strings.TrimSpace(string(output)), err
+}
+
+// A volume type whose directory gill creates before the volume, as for a
+// directory of the host or of an NFS storage.
+func TestStack_provisionsTheDirectoryOfAVolume(t *testing.T) {
+	for _, orchestrator := range []string{"compose", "swarm"} {
+		t.Run(orchestrator, func(t *testing.T) {
+			s := newStack(t)
+			s.after = append(s.after, func() { _, _ = storage(t, "rm -rf /storage/nemo-e2e/"+s.name) })
+			port := freePort(t)
+			s.importManifestFrom(from{volumes: `      data:
+        driver: local
+        options: { type: none, o: bind, device: "/tmp/nemo-e2e/{{.Stack}}/{{.Name}}" }
+        provision:
+          directory: "nemo-e2e/{{.Stack}}/{{.Name}}"
+          volume:
+            driver: local
+            options: { type: none, o: bind, device: /tmp }`}, orchestrator, port, bundles...)
+
+			_, err := s.nemo("up")
+			require.NoError(t, err)
+			served(t, port)
+
+			page, err := storage(t, "cat /storage/nemo-e2e/"+s.name+"/content/index.html")
+			require.NoError(t, err, page)
+			assert.Equal(t, "served", page, "web wrote its page in the directory gill provisioned")
 		})
 	}
 }
