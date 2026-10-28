@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/sntns/nemo/compare/v0.3.2...v0.4.0) (2026-10-28)
+
+
+### Features
+
+* **cli:** choose the target's Docker in the editor ([90c1e4f](https://github.com/sntns/nemo/commit/90c1e4fe36d2b34dbe191dd5353b8a47c39fd688))
+* **cli:** make the volume types in the editor, from the targets guide's ([359aacb](https://github.com/sntns/nemo/commit/359aacb2e9d09f46966e54529605efed7d205e4b))
+* **cli:** show an installation's own values in the editor's review ([7b52d9c](https://github.com/sntns/nemo/commit/7b52d9cd0d37044b28338a33b104451b0724acc7))
+
+
+### Bug Fixes
+
+* **cli:** keep the live progress of up and down within the terminal's height ([b7dbf88](https://github.com/sntns/nemo/commit/b7dbf88229b2778c317dbb35b5e14dd6cf4d6053))
+* **cli:** scroll the editor's review, and lists, to the terminal's height ([00eddf8](https://github.com/sntns/nemo/commit/00eddf83693e731b799e63628e11a77d321fbec3))
+
 ## [0.3.2](https://github.com/sntns/nemo/compare/v0.3.1...v0.3.2) (2026-10-28)
 
 
