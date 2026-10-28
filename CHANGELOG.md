@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.2](https://github.com/sntns/nemo/compare/v0.3.1...v0.3.2) (2026-10-28)
+
+
+### Bug Fixes
+
+* **bundle:** build a bundle whose typed fields hold variables ([ef251b8](https://github.com/sntns/nemo/commit/ef251b845c17d9034764889c52fa039c3ca6befb))
+* **cnab:** load the numbers of a bundle's compose project as a compose file does ([68ead23](https://github.com/sntns/nemo/commit/68ead23f1d08745d6933c3fcc97c685a122a1ed1))
+* **compose:** wait until a started container stays up ([ddc8a50](https://github.com/sntns/nemo/commit/ddc8a5058cdf9f6f62b2f4dfc04790c83e4d081e))
+* **installer:** give the daemon the cpus the compose file wrote ([c7261e1](https://github.com/sntns/nemo/commit/c7261e1c6e842d25832f5b4185e44f37ed666fc4))
+* **installer:** report a link, or a shared namespace, for what it is ([3a605ce](https://github.com/sntns/nemo/commit/3a605ce8dfbd0b9a282dbe4280a37667e7e5f642))
+* **stack:** take down a stack that has nothing installed, without an error ([665c47b](https://github.com/sntns/nemo/commit/665c47ba4f2ed2c5e7af6aa5d579fd662d068e17))
+* **swarm:** see a rollback when the installer's clock is ahead of the manager's ([7204a25](https://github.com/sntns/nemo/commit/7204a25bd9e723c6342d13f48e3cbbce43e886ba))
+
 ## [0.3.1](https://github.com/sntns/nemo/compare/v0.3.0...v0.3.1) (2026-10-27)
 
 
