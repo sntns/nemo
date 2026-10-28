@@ -83,6 +83,18 @@ func TestSteadiness(t *testing.T) {
 	assert.True(t, steady.held(restarted, start.Add(2*steadyFor+2*time.Second)))
 }
 
+func TestFateOf(t *testing.T) {
+	t.Parallel()
+	replica := func(hash string, state container.ContainerState) container.Summary {
+		return container.Summary{Labels: map[string]string{labels.Hash: hash}, State: state}
+	}
+	assert.Equal(t, created, fateOf(container.Summary{}, false, "a"))
+	assert.Equal(t, kept, fateOf(replica("a", container.StateRunning), true, "a"))
+	assert.Equal(t, started, fateOf(replica("a", container.StateExited), true, "a"))
+	assert.Equal(t, replaced, fateOf(replica("b", container.StateRunning), true, "a"), "another spec's")
+	assert.Equal(t, replaced, fateOf(replica("a", container.StateCreated), true, "a"), "never started")
+}
+
 func TestValidate_swarmSettingsAreWarnings(t *testing.T) {
 	t.Parallel()
 
