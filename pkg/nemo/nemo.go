@@ -4,6 +4,7 @@
 package nemo
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -221,28 +222,19 @@ type actionPlan struct {
 	digest      string
 }
 
+// plan is what an action runs: its bundle, the request's, else the one of
+// the installation nemo keeps, and its target, installer, parameters and
+// credentials, from the request, and from the installation unless it is a
+// fresh install.
 func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest, loaded *cnab.BundleReference) (actionPlan, error) {
 	plan := actionPlan{stack: request.Stack}
-	if loaded == nil && request.BundleSource != "" {
-		reference, err := nemo.load(ctx, request.BundleSource)
-		if err != nil {
-			return plan, err
-		}
-		loaded = &reference
-	}
-	if loaded != nil {
-		plan.bundle, plan.relocation, plan.source, plan.digest = loaded.Definition, loaded.RelocationMap, request.BundleSource, loaded.Digest.String()
-		if request.Name != "" && request.Name != plan.bundle.Name {
-			return plan, fmt.Errorf("the bundle at %s is %s, not %s", request.BundleSource, plan.bundle.Name, request.Name)
-		}
-		plan.reference = request.Bundle
-		if plan.reference == (storage.BundleReference{}) {
-			plan.reference = referenceOf(request.BundleSource, plan.bundle.Version)
-		}
+	given, err := nemo.givenBundle(ctx, request, loaded)
+	if err != nil {
+		return plan, err
 	}
 	name := request.Name
-	if name == "" {
-		name = plan.bundle.Name
+	if name == "" && given != nil {
+		name = given.Definition.Name
 	}
 	if request.Stack == "" || name == "" {
 		return plan, errors.New("give the stack, and the bundle's name or its file")
@@ -254,16 +246,14 @@ func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest
 		return plan, err
 	}
 	installed := known && stored.IsInstalled()
-
-	switch {
-	case action == cnab.ActionInstall && loaded == nil:
-		return plan, errors.New("install needs the bundle's source")
-	case action == cnab.ActionUpgrade && !installed:
-		return plan, fmt.Errorf("%s/%s is not installed", request.Stack, name)
-	case !known && loaded == nil:
-		return plan, fmt.Errorf("nemo does not know %s/%s: give its bundle's source and its target", request.Stack, name)
+	if err := allowed(action, request.Stack+"/"+name, given != nil, known, installed); err != nil {
+		return plan, err
 	}
-	if loaded == nil {
+
+	if given != nil {
+		plan.bundle, plan.relocation, plan.source, plan.digest = given.Definition, given.RelocationMap, request.BundleSource, given.Digest.String()
+		plan.reference = cmp.Or(request.Bundle, referenceOf(request.BundleSource, plan.bundle.Version))
+	} else {
 		if plan.bundle, err = nemo.bundleOf(ctx, stored); err != nil {
 			return plan, err
 		}
@@ -272,20 +262,57 @@ func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest
 
 	plan.target, plan.installer = request.Target, request.Installer
 	plan.parameters, plan.credentials = maps.Clone(request.Parameters), request.Credentials
-
-	// A fresh install starts from the request alone; anything else goes on
-	// from the installation.
 	if known && (installed || action != cnab.ActionInstall) {
-		if plan.target, err = sameTarget(stored, request.Target); err != nil {
-			return plan, err
-		}
-		if request.Installer.Driver == "" && request.Installer.Kubernetes == nil {
-			plan.installer = stored.Installer
-		}
-		plan.parameters = declared(plan.bundle.Parameters, stored.Parameters, request.Parameters)
-		plan.credentials = credentials.Merge(plan.bundle, stored.Credentials, request.Credentials)
+		return plan, plan.goOnFrom(stored, request)
 	}
 	return plan, nil
+}
+
+// givenBundle is the request's bundle: the one loaded already, else the one
+// at its source, or nil without either. It must be the installation's.
+func (nemo *Nemo) givenBundle(ctx context.Context, request ActionRequest, loaded *cnab.BundleReference) (*cnab.BundleReference, error) {
+	if loaded == nil && request.BundleSource != "" {
+		reference, err := nemo.load(ctx, request.BundleSource)
+		if err != nil {
+			return nil, err
+		}
+		loaded = &reference
+	}
+	if loaded != nil && request.Name != "" && request.Name != loaded.Definition.Name {
+		return nil, fmt.Errorf("the bundle at %s is %s, not %s", request.BundleSource, loaded.Definition.Name, request.Name)
+	}
+	return loaded, nil
+}
+
+// allowed tells whether the action can run on the installation: an install
+// needs a bundle, an upgrade an installation, and an installation nemo does
+// not know needs its bundle.
+func allowed(action, installation string, hasBundle, known, installed bool) error {
+	switch {
+	case action == cnab.ActionInstall && !hasBundle:
+		return errors.New("install needs the bundle's source")
+	case action == cnab.ActionUpgrade && !installed:
+		return fmt.Errorf("%s is not installed", installation)
+	case !known && !hasBundle:
+		return fmt.Errorf("nemo does not know %s: give its bundle's source and its target", installation)
+	}
+	return nil
+}
+
+// goOnFrom takes from the installation what the request leaves: its target,
+// which must stay, its installer unless one is given, and its parameters and
+// credentials, under the request's.
+func (plan *actionPlan) goOnFrom(stored storage.Installation, request ActionRequest) error {
+	var err error
+	if plan.target, err = sameTarget(stored, request.Target); err != nil {
+		return err
+	}
+	if request.Installer.Driver == "" && request.Installer.Kubernetes == nil {
+		plan.installer = stored.Installer
+	}
+	plan.parameters = declared(plan.bundle.Parameters, stored.Parameters, request.Parameters)
+	plan.credentials = credentials.Merge(plan.bundle, stored.Credentials, request.Credentials)
+	return nil
 }
 
 // bundleOf returns the bundle the installation's last action ran, from its
