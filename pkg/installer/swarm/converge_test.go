@@ -1,7 +1,6 @@
 package swarm
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -24,7 +23,7 @@ func replicated(running, desired uint64) swarm.Service {
 	}
 }
 
-func TestConvergence(t *testing.T) {
+func TestVerdictOf(t *testing.T) {
 	before := time.Now()
 	later, earlier := before.Add(time.Second), before.Add(-time.Hour)
 	own := ownUpdate{changed: true, after: before}
@@ -34,23 +33,23 @@ func TestConvergence(t *testing.T) {
 	two := uint64(2)
 
 	for name, testCase := range map[string]struct {
-		service swarm.Service
-		tasks   []swarm.Task
-		done    bool
-		err     string
+		service  swarm.Service
+		tasks    []swarm.Task
+		verdict  verdict
+		rollback string
 	}{
-		"all running":         {replicated(2, 2), []swarm.Task{running, running}, true, ""},
-		"one still starting":  {replicated(1, 2), []swarm.Task{running, starting}, false, ""},
-		"old task still runs": {replicated(2, 1), []swarm.Task{running}, false, ""},
-		"scaled to zero":      {replicated(0, 0), nil, true, ""},
-		"no status yet":       {swarm.Service{}, nil, false, ""},
+		"all running":         {replicated(2, 2), []swarm.Task{running, running}, converged, ""},
+		"one still starting":  {replicated(1, 2), []swarm.Task{running, starting}, progressing, ""},
+		"old task still runs": {replicated(2, 1), []swarm.Task{running}, progressing, ""},
+		"scaled to zero":      {replicated(0, 0), nil, converged, ""},
+		"no status yet":       {swarm.Service{}, nil, progressing, ""},
 		"updating": {
 			func() swarm.Service {
 				service := replicated(1, 1)
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStateUpdating, StartedAt: &later}
 				return service
 			}(),
-			[]swarm.Task{running}, false, "",
+			[]swarm.Task{running}, progressing, "",
 		},
 		"rolled back": {
 			func() swarm.Service {
@@ -58,7 +57,7 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStateRollbackCompleted, StartedAt: &later, Message: "task failed"}
 				return service
 			}(),
-			[]swarm.Task{running}, false, "rolled the update back: task failed",
+			[]swarm.Task{running}, rolledBack, "task failed",
 		},
 		"rollback from an earlier update": {
 			func() swarm.Service {
@@ -66,7 +65,7 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStateRollbackCompleted, StartedAt: &earlier}
 				return service
 			}(),
-			[]swarm.Task{running}, true, "",
+			[]swarm.Task{running}, converged, "",
 		},
 		"paused": {
 			func() swarm.Service {
@@ -74,7 +73,7 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
 				return service
 			}(),
-			nil, false, "",
+			nil, progressing, "",
 		},
 		"paused, then restarted": {
 			func() swarm.Service {
@@ -82,64 +81,63 @@ func TestConvergence(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
 				return service
 			}(),
-			[]swarm.Task{running}, true, "",
+			[]swarm.Task{running}, converged, "",
 		},
 		"restarting a failed task": {
 			replicated(0, 1),
-			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), {Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning}}, false, "",
+			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), {Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning}}, progressing, "",
 		},
 		"restarting a failed task, not scheduled yet": {
 			replicated(0, 1),
 			[]swarm.Task{
 				{Slot: 1, NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
 				{Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateNew}, DesiredState: swarm.TaskStateReady},
-			}, false, "",
+			}, progressing, "",
 		},
 		"restarting a failed task on another node": {
 			replicated(0, 1),
 			[]swarm.Task{
 				{Slot: 1, NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
 				{Slot: 1, NodeID: "other", Status: swarm.TaskStatus{State: swarm.TaskStateStarting}, DesiredState: swarm.TaskStateRunning},
-			}, false, "",
+			}, progressing, "",
 		},
 		"restart policy gave up on one node of a global service": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{Global: &swarm.GlobalService{}}}},
 			[]swarm.Task{
 				{NodeID: "node", Status: swarm.TaskStatus{State: swarm.TaskStateFailed}, DesiredState: swarm.TaskStateShutdown},
 				{NodeID: "other", Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, DesiredState: swarm.TaskStateRunning},
-			}, false, "stopped restarting",
+			}, gaveUp, "",
 		},
 		"failed task not restarted yet": {
 			replicated(0, 1),
-			[]swarm.Task{failedTask(1, swarm.TaskStateRunning)}, false, "",
+			[]swarm.Task{failedTask(1, swarm.TaskStateRunning)}, progressing, "",
 		},
 		"restart policy gave up": {
 			replicated(0, 1),
-			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), failedTask(1, swarm.TaskStateShutdown)}, false, "stopped restarting",
+			[]swarm.Task{failedTask(1, swarm.TaskStateShutdown), failedTask(1, swarm.TaskStateShutdown)}, gaveUp, "",
 		},
 		"restart policy gave up on one slot": {
 			replicated(1, 2),
 			[]swarm.Task{{Slot: 1, Status: swarm.TaskStatus{State: swarm.TaskStateRunning}, DesiredState: swarm.TaskStateRunning}, failedTask(2, swarm.TaskStateShutdown)},
-			false, "stopped restarting",
+			gaveUp, "",
 		},
 		"replicated job done": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{TotalCompletions: &two}}}},
-			[]swarm.Task{complete, complete}, true, "",
+			[]swarm.Task{complete, complete}, converged, "",
 		},
 		"replicated job running": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{TotalCompletions: &two}}}},
-			[]swarm.Task{complete, running}, false, "",
+			[]swarm.Task{complete, running}, progressing, "",
 		},
 		"global job done": {
 			swarm.Service{Spec: swarm.ServiceSpec{Mode: swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}}}},
-			[]swarm.Task{complete}, true, "",
+			[]swarm.Task{complete}, converged, "",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			done, err := convergence(testCase.service, testCase.tasks, own)
-			if done != testCase.done || (err == nil) != (testCase.err == "") || (err != nil && !strings.Contains(err.Error(), testCase.err)) {
-				t.Errorf("got %v, %v; want %v, %q", done, err, testCase.done, testCase.err)
-			}
+			verdict, rollback := verdictOf(testCase.service, testCase.tasks, own)
+			assert.Equal(t, testCase.verdict, verdict)
+			assert.Equal(t, testCase.rollback, rollback)
 		})
 	}
 }
@@ -161,6 +159,15 @@ func TestOwnUpdate(t *testing.T) {
 	assert.False(t, ownUpdate{}.of(status(next)), "a service nemo left as it was")
 }
 
+func TestSteadiness(t *testing.T) {
+	start := time.Now()
+	var steady steadiness
+	assert.False(t, steady.held(start, 5*time.Second), "just converged")
+	assert.False(t, steady.held(start.Add(4*time.Second), 5*time.Second))
+	assert.True(t, steady.held(start.Add(5*time.Second), 5*time.Second), "converged for the monitor period")
+	assert.True(t, (&steadiness{}).held(start, 0), "a job has no monitor period")
+}
+
 func TestTasksOf(t *testing.T) {
 	preparing := task(swarm.TaskStatePreparing, swarm.TaskStateRunning)
 	running := task(swarm.TaskStateRunning, swarm.TaskStateRunning)
@@ -175,16 +182,26 @@ func TestTasksOf(t *testing.T) {
 	}
 }
 
-func TestLastFailure(t *testing.T) {
+func TestLastError(t *testing.T) {
 	older, newer := failedTask(1, swarm.TaskStateShutdown), failedTask(1, swarm.TaskStateShutdown)
 	older.Status.Err = "task: non-zero exit (2)"
 	newer.CreatedAt = time.Now()
 	running := task(swarm.TaskStateRunning, swarm.TaskStateRunning)
+
+	assert.Equal(t, "task: non-zero exit (1)", lastError([]swarm.Task{newer, older, running}), "the newest error")
+	assert.Empty(t, lastError([]swarm.Task{running}))
+}
+
+// The phase shown is verifying once converged, else why the last task failed, else the state of
+// the least advanced task.
+func TestObserve(t *testing.T) {
+	running := task(swarm.TaskStateRunning, swarm.TaskStateRunning)
 	running.Slot = 1
-	if reason, gaveUp := lastFailure([]swarm.Task{newer, older, running}); reason != "task: non-zero exit (1)" || gaveUp {
-		t.Errorf("got %q, %v; want the newest error, still restarting", reason, gaveUp)
-	}
-	if reason, gaveUp := lastFailure([]swarm.Task{running}); reason != "" || gaveUp {
-		t.Errorf("got %q, %v; want no failure", reason, gaveUp)
-	}
+	starting := task(swarm.TaskStateStarting, swarm.TaskStateRunning)
+	starting.Slot = 1
+	failed := failedTask(1, swarm.TaskStateShutdown)
+
+	assert.Equal(t, "verifying", observe(replicated(1, 1), []swarm.Task{running, failed}, ownUpdate{}).phase)
+	assert.Equal(t, "restarting: task: non-zero exit (1)", observe(replicated(0, 1), []swarm.Task{starting, failed}, ownUpdate{}).phase)
+	assert.Equal(t, "starting", observe(replicated(0, 1), []swarm.Task{starting}, ownUpdate{}).phase)
 }
