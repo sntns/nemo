@@ -43,137 +43,226 @@ type StackResult struct {
 
 // Up installs the bundles of the stack in the order of their dependencies,
 // or upgrades those installed, then uninstalls the installations of the
-// stack whose bundle it no longer has, dependants first. It stops at the
-// first action that fails.
+// stack whose bundle it no longer has, dependants first. It checks every
+// bundle that has a validate action first, and stops at the first action
+// that fails.
 func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error) {
+	plan, err := nemo.planUp(ctx, request)
+	if err != nil {
+		return StackResult{}, err
+	}
+	plan.announce(progressOf(request.Progress))
+	for _, bundle := range plan.validated() {
+		if _, err := nemo.actOn(ctx, plan, bundle, request.Progress, true); err != nil {
+			return StackResult{}, err
+		}
+	}
 	var result StackResult
-	if err := request.Stack.Validate(); err != nil {
-		return result, err
-	}
-	bundles := make([]cnab.ExtendedBundle, len(request.Stack.Installations))
-	entries := map[string]stackEntry{}
-	for i, spec := range request.Stack.Installations {
-		source, err := request.Stack.Source(spec)
-		if err != nil {
-			return result, err
-		}
-		loaded, err := nemo.load(ctx, source)
-		if err != nil {
-			return result, err
-		}
-		if spec.Name != loaded.Definition.Name {
-			return result, fmt.Errorf("stack %s: the bundle at %s is %s, not %s", request.Stack.Name, source, loaded.Definition.Name, spec.Name)
-		}
-		if _, twice := entries[spec.Name]; twice {
-			return result, fmt.Errorf("stack %s: installation %s is given twice", request.Stack.Name, spec.Name)
-		}
-		spec.Stack = request.Stack.Name
-		bundles[i], entries[spec.Name] = loaded.Definition, stackEntry{spec: spec, source: source, loaded: loaded}
-	}
-	resolver := cnab.Resolver{Tags: nemo.tags}
-	for missing := stack.Missing(bundles); len(missing) > 0; missing = stack.Missing(bundles) {
-		for _, requirement := range missing {
-			spec, source, loaded, err := nemo.dependency(ctx, request.Stack, resolver, requirement)
-			if err != nil {
-				return result, fmt.Errorf("stack %s: dependency %s: %w", request.Stack.Name, requirement.Dependency.Bundle, err)
-			}
-			bundles = append(bundles, loaded.Definition)
-			entries[loaded.Definition.Name] = stackEntry{spec: spec, source: source, loaded: loaded}
-		}
-	}
-	if err := stack.CheckDependencies(bundles); err != nil {
-		return result, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
-	}
-	ordered, err := stack.Order(bundles)
-	if err != nil {
-		return result, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
-	}
-
-	present, err := nemo.present(ctx, request.Stack.Name)
-	if err != nil {
-		return result, err
-	}
-	if len(request.Only) > 0 {
-		for _, name := range request.Only {
-			if _, listed := entries[name]; !listed {
-				return result, fmt.Errorf("stack %s has no installation %s", request.Stack.Name, name)
-			}
-		}
-		// Dependants come before their dependencies backwards: the dependencies not installed yet join them.
-		wanted := slices.Clone(request.Only)
-		for _, bundle := range slices.Backward(ordered) {
-			if slices.Contains(wanted, bundle.Name) {
-				for _, name := range stack.DependencyNames(bundle) {
-					if !present[name].IsInstalled() {
-						wanted = append(wanted, name)
-					}
-				}
-			}
-		}
-		ordered = slices.DeleteFunc(ordered, func(bundle cnab.ExtendedBundle) bool { return !slices.Contains(wanted, bundle.Name) })
-	}
-	events := progressOf(request.Progress)
-	for _, bundle := range ordered {
-		action := cnab.ActionInstall
-		if present[bundle.Name].IsInstalled() {
-			action = cnab.ActionUpgrade
-		}
-		events.Emit(progress.Event{Installation: request.Stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: action})
-	}
-	act := func(bundle cnab.ExtendedBundle, validate bool) (Run, error) {
-		stacked := entries[bundle.Name]
-		parameters := map[string]string{}
-		for name, value := range request.Stack.Parameters {
-			if _, declared := bundle.Parameters[name]; declared {
-				parameters[name] = value
-			}
-		}
-		maps.Copy(parameters, stacked.spec.Parameters)
-		action := cnab.ActionInstall
-		if present[bundle.Name].IsInstalled() {
-			action = cnab.ActionUpgrade
-		}
-		spec := stacked.spec
-		spec.Parameters = parameters
-		spec.Credentials = credentials.Merge(bundle, request.Stack.Credentials, stacked.spec.Credentials)
-		run, err := nemo.act(ctx, action, ActionRequest{
-			InstallationSpec: spec,
-			BundleSource:     stacked.source,
-			Target:           request.Stack.Target,
-			Installer:        request.Stack.Installer,
-			Progress:         request.Progress,
-			Validate:         validate,
-		}, &stacked.loaded)
-		if err != nil {
-			err = fmt.Errorf("%s/%s: %w", request.Stack.Name, bundle.Name, err)
-		}
-		return run, err
-	}
-	for _, bundle := range ordered {
-		if _, declared := bundle.Actions[cnab.ActionValidate]; !declared {
-			continue
-		}
-		if _, err := act(bundle, true); err != nil {
-			return result, err
-		}
-	}
-	for _, bundle := range ordered {
-		run, err := act(bundle, false)
+	for _, bundle := range plan.ordered {
+		run, err := nemo.actOn(ctx, plan, bundle, request.Progress, false)
 		if run.Revision != "" {
 			result.Runs = append(result.Runs, run)
 		}
 		if err != nil {
 			return result, err
 		}
-		delete(present, bundle.Name)
 	}
 	if len(request.Only) > 0 {
 		return result, nil
 	}
-
-	runs, err := nemo.uninstall(ctx, request.Stack.Name, present, request.Purge, request.Progress)
+	runs, err := nemo.uninstall(ctx, plan.stack.Name, plan.dropped(), request.Purge, request.Progress)
 	result.Runs = append(result.Runs, runs...)
 	return result, err
+}
+
+// upPlan is what Up does: the bundles to act on, in the order of their
+// dependencies, and what the stack had installed before.
+type upPlan struct {
+	stack   stack.Stack
+	entries map[string]stackEntry
+	ordered []cnab.ExtendedBundle
+	present map[string]storage.Installation
+}
+
+// planUp loads the bundles of the stack and the dependencies it does not
+// list, checks their dependencies and orders them: all of them, or those Only
+// names with their dependencies not installed yet.
+func (nemo *Nemo) planUp(ctx context.Context, request UpRequest) (*upPlan, error) {
+	if err := request.Stack.Validate(); err != nil {
+		return nil, err
+	}
+	loaded, err := nemo.loadStack(ctx, request.Stack)
+	if err != nil {
+		return nil, err
+	}
+	if err := stack.CheckDependencies(loaded.bundles); err != nil {
+		return nil, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
+	}
+	ordered, err := stack.Order(loaded.bundles)
+	if err != nil {
+		return nil, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
+	}
+	present, err := nemo.present(ctx, request.Stack.Name)
+	if err != nil {
+		return nil, err
+	}
+	plan := &upPlan{stack: request.Stack, entries: loaded.entries, ordered: ordered, present: present}
+	if len(request.Only) > 0 {
+		return plan, plan.narrow(request.Only)
+	}
+	return plan, nil
+}
+
+// stackBundles are the bundles of a stack, in the order it lists them, then
+// the dependencies it does not list.
+type stackBundles struct {
+	entries map[string]stackEntry
+	bundles []cnab.ExtendedBundle
+}
+
+func (loaded *stackBundles) add(entry stackEntry) {
+	loaded.entries[entry.loaded.Definition.Name] = entry
+	loaded.bundles = append(loaded.bundles, entry.loaded.Definition)
+}
+
+// loadStack loads the bundle of each installation of the stack, then the
+// dependencies the stack does not list, until none is missing.
+func (nemo *Nemo) loadStack(ctx context.Context, stackOf stack.Stack) (stackBundles, error) {
+	loaded := stackBundles{entries: map[string]stackEntry{}}
+	if err := nemo.loadInstallations(ctx, stackOf, &loaded); err != nil {
+		return loaded, err
+	}
+	return loaded, nemo.loadDependencies(ctx, stackOf, &loaded)
+}
+
+// loadInstallations loads the bundle of each installation the stack lists.
+func (nemo *Nemo) loadInstallations(ctx context.Context, stackOf stack.Stack, loaded *stackBundles) error {
+	for _, spec := range stackOf.Installations {
+		source, err := stackOf.Source(spec)
+		if err != nil {
+			return err
+		}
+		bundle, err := nemo.load(ctx, source)
+		if err != nil {
+			return err
+		}
+		if spec.Name != bundle.Definition.Name {
+			return fmt.Errorf("stack %s: the bundle at %s is %s, not %s", stackOf.Name, source, bundle.Definition.Name, spec.Name)
+		}
+		if _, twice := loaded.entries[spec.Name]; twice {
+			return fmt.Errorf("stack %s: installation %s is given twice", stackOf.Name, spec.Name)
+		}
+		spec.Stack = stackOf.Name
+		loaded.add(stackEntry{spec: spec, source: source, loaded: bundle})
+	}
+	return nil
+}
+
+// loadDependencies loads the dependencies of the bundles the stack does not
+// list, and theirs, until none is missing.
+func (nemo *Nemo) loadDependencies(ctx context.Context, stackOf stack.Stack, loaded *stackBundles) error {
+	resolver := cnab.Resolver{Tags: nemo.tags}
+	for missing := stack.Missing(loaded.bundles); len(missing) > 0; missing = stack.Missing(loaded.bundles) {
+		for _, requirement := range missing {
+			spec, source, bundle, err := nemo.dependency(ctx, stackOf, resolver, requirement)
+			if err != nil {
+				return fmt.Errorf("stack %s: dependency %s: %w", stackOf.Name, requirement.Dependency.Bundle, err)
+			}
+			loaded.add(stackEntry{spec: spec, source: source, loaded: bundle})
+		}
+	}
+	return nil
+}
+
+// narrow keeps the installations only names, and their dependencies not
+// installed yet. Backwards, dependants come before their dependencies: those
+// join them on the way.
+func (plan *upPlan) narrow(only []string) error {
+	for _, name := range only {
+		if _, listed := plan.entries[name]; !listed {
+			return fmt.Errorf("stack %s has no installation %s", plan.stack.Name, name)
+		}
+	}
+	wanted := slices.Clone(only)
+	for _, bundle := range slices.Backward(plan.ordered) {
+		if !slices.Contains(wanted, bundle.Name) {
+			continue
+		}
+		for _, name := range stack.DependencyNames(bundle) {
+			if !plan.present[name].IsInstalled() {
+				wanted = append(wanted, name)
+			}
+		}
+	}
+	plan.ordered = slices.DeleteFunc(plan.ordered, func(bundle cnab.ExtendedBundle) bool { return !slices.Contains(wanted, bundle.Name) })
+	return nil
+}
+
+// action is install for a bundle the stack does not have installed, else upgrade.
+func (plan *upPlan) action(bundle cnab.ExtendedBundle) string {
+	if plan.present[bundle.Name].IsInstalled() {
+		return cnab.ActionUpgrade
+	}
+	return cnab.ActionInstall
+}
+
+// announce tells each installation pending, with its action.
+func (plan *upPlan) announce(events progress.Sink) {
+	for _, bundle := range plan.ordered {
+		events.Emit(progress.Event{Installation: plan.stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: plan.action(bundle)})
+	}
+}
+
+// validated returns the bundles that have a validate action, in order.
+func (plan *upPlan) validated() []cnab.ExtendedBundle {
+	return slices.DeleteFunc(slices.Clone(plan.ordered), func(bundle cnab.ExtendedBundle) bool {
+		_, declared := bundle.Actions[cnab.ActionValidate]
+		return !declared
+	})
+}
+
+// dropped returns the installations of the stack whose bundle it no longer has.
+func (plan *upPlan) dropped() map[string]storage.Installation {
+	dropped := maps.Clone(plan.present)
+	for name := range plan.entries {
+		delete(dropped, name)
+	}
+	return dropped
+}
+
+// actionRequest is the request of the action on the bundle: the stack's
+// parameters the bundle declares, under the installation's own, and the
+// credentials of both.
+func (plan *upPlan) actionRequest(bundle cnab.ExtendedBundle, events progress.Sink, validate bool) ActionRequest {
+	entry := plan.entries[bundle.Name]
+	parameters := map[string]string{}
+	for name, value := range plan.stack.Parameters {
+		if _, declared := bundle.Parameters[name]; declared {
+			parameters[name] = value
+		}
+	}
+	maps.Copy(parameters, entry.spec.Parameters)
+	spec := entry.spec
+	spec.Parameters = parameters
+	spec.Credentials = credentials.Merge(bundle, plan.stack.Credentials, entry.spec.Credentials)
+	return ActionRequest{
+		InstallationSpec: spec,
+		BundleSource:     entry.source,
+		Target:           plan.stack.Target,
+		Installer:        plan.stack.Installer,
+		Progress:         events,
+		Validate:         validate,
+	}
+}
+
+// actOn runs the action of the plan on the bundle: its validate action when validate is set.
+func (nemo *Nemo) actOn(ctx context.Context, plan *upPlan, bundle cnab.ExtendedBundle, events progress.Sink, validate bool) (Run, error) {
+	entry := plan.entries[bundle.Name]
+	run, err := nemo.act(ctx, plan.action(bundle), plan.actionRequest(bundle, events, validate), &entry.loaded)
+	if err != nil {
+		err = fmt.Errorf("%s/%s: %w", plan.stack.Name, bundle.Name, err)
+	}
+	return run, err
 }
 
 // dependency loads a dependency the stack does not list: from the
