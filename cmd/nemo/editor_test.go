@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/cnabio/cnab-go/bundle"
 	"github.com/cnabio/cnab-go/bundle/definition"
 	"github.com/cnabio/cnab-go/valuesource"
@@ -220,4 +222,42 @@ func TestEditor_targetDocker(t *testing.T) {
 	assert.Equal(t, 1, e.cursor, "on the address the manifest gives")
 	press(e, "down", "enter", "production", "enter")
 	assert.Equal(t, target.Configuration{Context: "production"}, e.stack.Target.Configuration, "a context instead of the address")
+}
+
+func TestEditor_reviewFitsTheTerminal(t *testing.T) {
+	t.Parallel()
+	imported := stack.Stack{
+		Name:       "shop",
+		Remote:     "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}",
+		Target:     target.Target{Orchestrator: target.Swarm},
+		Parameters: map[string]string{"region": "eu5"},
+	}
+	for _, name := range []string{"web", "db"} {
+		imported.Installations = append(imported.Installations, storage.InstallationSpec{Name: name, Stack: "shop", Bundle: storage.BundleReference{Version: "1.1.0"}})
+	}
+	imported.Credentials = []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "env", Value: "TOKEN"}}}
+	e := shopEditor(imported, modeEdit, true)
+	drain(e, e.Init())
+	e.Update(tea.WindowSizeMsg{Width: 80, Height: 14})
+	require.Equal(t, screenReview, e.screen().kind)
+
+	rows := func() []string { return strings.Split(ansi.Strip(e.View().Content), "\n") }
+	assert.Len(t, rows(), 14, "as high as the terminal")
+	assert.Contains(t, strings.Join(rows(), "\n"), "Save shop", "the cursor's line, saving")
+	assert.Contains(t, strings.Join(rows(), "\n"), "more", "says what it leaves out")
+
+	press(e, "up", "up", "up", "up", "up")
+	assert.Contains(t, strings.Join(rows(), "\n"), "Bundles", "follows the cursor")
+	assert.Len(t, rows(), 14)
+}
+
+func TestWindow(t *testing.T) {
+	t.Parallel()
+	lines := []string{"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	assert.Equal(t, lines[:3], window(lines[:3], 0, 5), "it fits")
+	shown := window(lines, 9, 5)
+	assert.Equal(t, []string{"7", "8", "9"}, shown[1:4], "the last ones, with the cursor")
+	assert.Contains(t, ansi.Strip(shown[0]), "↑ 7 more")
+	assert.Empty(t, shown[4], "nothing below")
+	assert.Equal(t, []string{"4", "5", "6"}, window(lines, 5, 5)[1:4], "the cursor in the middle")
 }

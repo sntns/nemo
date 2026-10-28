@@ -134,6 +134,7 @@ type editor struct {
 	quitting bool
 	spin     spinner.Model
 	width    int
+	height   int
 	saved    bool
 
 	load func(ctx context.Context, source string) (cnab.BundleReference, error)
@@ -146,7 +147,7 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 		askName: mode != modeEdit && (edited.Name == "" || taken(edited.Name)),
 		found:   map[string]cnab.ExtendedBundle{}, chosen: map[string]bool{}, bundles: map[string]cnab.ExtendedBundle{},
 		kinds: map[string]string{}, visited: map[step]bool{}, loading: map[string]string{},
-		input: textinput.New(), spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80,
+		input: textinput.New(), spin: spinner.New(spinner.WithSpinner(spinner.Dot)), width: 80, height: 24,
 		load: nemo.LoadBundle, tags: bundle.RegistryTags{}.ListTags,
 	}
 	e.input.Prompt = "> "
@@ -575,7 +576,7 @@ func (e *editor) read(bundles map[string]cnab.ExtendedBundle) {
 func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		e.width = msg.Width
+		e.width, e.height = msg.Width, msg.Height
 		e.input.SetWidth(max(20, msg.Width-6))
 		return e, nil
 	case spinner.TickMsg:
@@ -1115,25 +1116,50 @@ var (
 	title  = lipgloss.NewStyle().Bold(true)
 )
 
+// View draws the screen to the terminal's height: a body longer than the
+// room left shows the lines around its cursor.
 func (e *editor) View() tea.View {
-	var out strings.Builder
-	fmt.Fprintf(&out, " %s%s\n", bold.Render("nemo"), faint.Render(" · stack "+cmp.Or(e.stack.Name, "new")))
-	out.WriteString(" " + e.stepBar() + "\n\n")
+	var top strings.Builder
+	fmt.Fprintf(&top, " %s%s\n", bold.Render("nemo"), faint.Render(" · stack "+cmp.Or(e.stack.Name, "new")))
+	top.WriteString(" " + e.stepBar() + "\n\n")
 
 	screen := e.screen()
 	heading, description := e.heading(screen)
-	out.WriteString(" " + title.Render(heading) + "\n")
+	top.WriteString(" " + title.Render(heading) + "\n")
 	if description != "" {
-		out.WriteString(lipgloss.NewStyle().Width(max(20, e.width-2)).PaddingLeft(1).Render(faint.Render(description)) + "\n")
+		top.WriteString(lipgloss.NewStyle().Width(max(20, e.width-2)).PaddingLeft(1).Render(faint.Render(description)) + "\n")
 	}
-	out.WriteString("\n" + e.body(screen) + "\n")
+	top.WriteString("\n")
+
+	bottom := "\n"
 	if e.problem != "" {
-		out.WriteString("\n " + red.Render("! "+e.problem) + "\n")
+		bottom += "\n " + red.Render("! "+e.problem) + "\n"
 	}
-	out.WriteString("\n " + faint.Render(e.help(screen)) + "\n")
-	view := tea.NewView(out.String())
+	bottom += "\n " + faint.Render(e.help(screen)) + "\n"
+
+	lines, row := e.body(screen)
+	room := e.height - strings.Count(top.String(), "\n") - strings.Count(bottom, "\n")
+	view := tea.NewView(top.String() + strings.Join(window(lines, row, room), "\n") + bottom)
 	view.AltScreen = true
 	return view
+}
+
+// window keeps the lines that fit in room, the cursor's row among them,
+// and says how many it leaves out above and below.
+func window(lines []string, row, room int) []string {
+	if len(lines) <= room {
+		return lines
+	}
+	room = max(1, room-2)
+	first := min(max(0, row-room/2), len(lines)-room)
+	last := first + room
+	more := func(count int, arrow string) string {
+		if count == 0 {
+			return ""
+		}
+		return faint.Render(fmt.Sprintf("   %s %d more", arrow, count))
+	}
+	return slices.Concat([]string{more(first, "↑")}, lines[first:last], []string{more(len(lines)-last, "↓")})
 }
 
 func (e *editor) stepBar() string {
@@ -1233,9 +1259,10 @@ func installationNames(installations []storage.InstallationSpec) []string {
 	return names
 }
 
-func (e *editor) body(screen screen) string {
+// body returns the lines of the screen's body, and the row of its cursor.
+func (e *editor) body(screen screen) ([]string, int) {
 	if loading := e.loading[map[screenKind]string{screenLayouts: "layouts", screenVersion: "versions", screenParameter: "bundles", screenCredential: "bundles"}[screen.kind]]; loading != "" {
-		return " " + e.spin.View() + " " + loading
+		return []string{" " + e.spin.View() + " " + loading}, 0
 	}
 	switch screen.kind {
 	case screenSource, screenDocker, screenOrchestrator, screenImages:
@@ -1243,10 +1270,10 @@ func (e *editor) body(screen screen) string {
 		for i, option := range e.options(screen) {
 			lines = append(lines, e.optionLine(i, fmt.Sprintf("%-28s", option.label)+faint.Render(option.help)))
 		}
-		return strings.Join(lines, "\n")
+		return lines, e.cursor
 	case screenLayouts:
 		if e.failure != "" && len(e.found) == 0 {
-			return " " + red.Render(e.failure)
+			return []string{" " + red.Render(e.failure)}, 0
 		}
 		var lines []string
 		for i, name := range slices.Sorted(maps.Keys(e.found)) {
@@ -1256,16 +1283,16 @@ func (e *editor) body(screen screen) string {
 			}
 			lines = append(lines, e.optionLine(i, check+" "+name+" "+faint.Render(e.found[name].Version)))
 		}
-		return strings.Join(lines, "\n")
+		return lines, e.cursor
 	case screenVersion:
 		if len(e.versions) == 0 {
-			return " " + e.input.View()
+			return []string{" " + e.input.View()}, 0
 		}
 		var lines []string
-		for i, version := range e.versions[:min(len(e.versions), 10)] {
+		for i, version := range e.versions {
 			lines = append(lines, e.optionLine(i, version))
 		}
-		return strings.Join(lines, "\n")
+		return lines, e.cursor
 	case screenCredential:
 		var kinds []string
 		for _, kind := range sourceKinds() {
@@ -1286,11 +1313,14 @@ func (e *editor) body(screen screen) string {
 		if e.field == 0 {
 			input = faint.Render("  " + cmp.Or(e.input.Value(), "…"))
 		}
-		return fmt.Sprintf(" %s Source    %s\n %s %-9s %s", marker(0), strings.Join(kinds, ""), marker(1), sourceTitles[e.kinds[screen.name]], input)
+		return []string{
+			fmt.Sprintf(" %s Source    %s", marker(0), strings.Join(kinds, "")),
+			fmt.Sprintf(" %s %-9s %s", marker(1), sourceTitles[e.kinds[screen.name]], input),
+		}, e.field
 	case screenReview:
 		return e.review()
 	}
-	return " " + e.input.View()
+	return []string{" " + e.input.View()}, 0
 }
 
 func (e *editor) optionLine(index int, text string) string {
@@ -1300,8 +1330,9 @@ func (e *editor) optionLine(index int, text string) string {
 	return "   " + text
 }
 
-func (e *editor) review() string {
+func (e *editor) review() ([]string, int) {
 	var lines []string
+	row := 0
 	for i, line := range e.reviewLines() {
 		cursor, mark := "  ", "  "
 		if i == e.cursor {
@@ -1329,9 +1360,12 @@ func (e *editor) review() string {
 		if line.problem {
 			value = red.Render(value)
 		}
+		if i == e.cursor {
+			row = len(lines)
+		}
 		lines = append(lines, " "+cursor+mark+label+" "+value)
 	}
-	return strings.Join(lines, "\n")
+	return lines, row
 }
 
 func (e *editor) help(screen screen) string {
