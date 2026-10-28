@@ -122,3 +122,22 @@ func TestLoad(t *testing.T) {
 	assert.Contains(t, files, filepath.Join(ocispec.ImageBlobsDir, "sha256", web.Digest.Encoded()))
 	assert.Equal(t, digest.FromBytes(files[filepath.Join(ocispec.ImageBlobsDir, "sha256", web.Digest.Encoded())]), web.Digest, "blobs as they are")
 }
+
+func TestLoad_noDigest(t *testing.T) {
+	t.Parallel()
+	image := layoutImage(t, "sntns-cloud-service-faas-domain:dev", filepath.Join(t.TempDir(), "web.oci"))
+	manifest, source := image.Digest, image.Source
+	reads := 0
+	image.Digest, image.Source = "", func(ctx context.Context) (remotes.Fetcher, ocispec.Descriptor, error) {
+		reads++
+		return source(ctx)
+	}
+	fake := &fakeDocker{has: map[string]bool{}, loaded: map[string]map[string][]byte{}}
+
+	relocated, err := Load(context.Background(), fake, []Image{image}, progress.Discard)
+	require.NoError(t, err)
+	loaded := "sntns-cloud-service-faas-domain:sha256-" + manifest.Encoded()
+	assert.Equal(t, loaded, relocated[image.Name], "named after the digest its source gives")
+	assert.Contains(t, fake.loaded, loaded)
+	assert.Equal(t, 1, reads, "read once, for its digest and its content")
+}
