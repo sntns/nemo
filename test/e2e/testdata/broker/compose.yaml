@@ -1,0 +1,10 @@
+x-nemo-bundle:
+  name: broker
+services:
+  broker:
+    image: busybox:1.37
+    # Up a few seconds after it starts, as NATS is for manta's services.
+    command: ["sh", "-c", "sleep 4; exec httpd -f -p 4222 -h /etc"]
+    networks: [mesh]
+networks:
+  mesh: {}

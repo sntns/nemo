@@ -1,0 +1,24 @@
+x-nemo-bundle:
+  name: api
+  dependencies:
+    requires:
+      broker:
+        bundle: bench/broker
+services:
+  api:
+    image: busybox:1.37
+    # Exits until the broker answers, and its secret and region are there.
+    command: ["sh", "-c", "wget -q -O /dev/null http://broker:4222/hostname && grep -q s3cret /run/secrets/token && [ \"$$REGION\" = e2e ] || exit 1; exec httpd -f -p 8080 -h /etc"]
+    environment:
+      REGION: ${REGION}
+    secrets: [token]
+    networks: [mesh]
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 2s
+networks:
+  mesh: {}
+secrets:
+  token:
+    environment: API_TOKEN
