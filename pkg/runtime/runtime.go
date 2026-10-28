@@ -209,37 +209,48 @@ func newClaim(installation, action string, bundle cnab.ExtendedBundle, parameter
 	return created, created.Validate()
 }
 
+// withOwnParameters returns the parameters given, with those nemo sets
+// itself, from where they come: the orchestrator and the volume types from
+// the target, the registries' credentials from docker login. Each is set
+// when the bundle declares it, and refused when given.
+func withOwnParameters(request Request, registryAuth string) (map[string]string, error) {
+	given := maps.Clone(request.Parameters)
+	if given == nil {
+		given = map[string]string{}
+	}
+	var volumes string
+	if len(request.Target.Volumes) > 0 {
+		encoded, err := json.Marshal(request.Target.Volumes)
+		if err != nil {
+			return nil, err
+		}
+		volumes = string(encoded)
+	}
+	own := []struct{ name, from, value string }{
+		{cnab.ParameterOrchestrator, "the target", request.Target.Orchestrator},
+		{cnab.ParameterVolumes, "the target", volumes},
+		{cnab.ParameterRegistryAuth, "docker login", registryAuth},
+	}
+	for _, parameter := range own {
+		if _, set := given[parameter.name]; set {
+			return nil, fmt.Errorf("parameter %s comes from %s, it can't be given", parameter.name, parameter.from)
+		}
+		if _, declared := request.Bundle.Parameters[parameter.name]; declared && parameter.value != "" {
+			given[parameter.name] = parameter.value
+		}
+	}
+	return given, nil
+}
+
 // parametersOf returns the value of every parameter that applies to the
 // action: the one given, converted to its definition's type, else its
 // default. The orchestrator and the volume types come from the target, and
 // the registries' credentials from the runtime, never from a value given.
 func parametersOf(request Request, registryAuth string) (map[string]any, error) {
 	bundle := request.Bundle
-	given := maps.Clone(request.Parameters)
-	if given == nil {
-		given = map[string]string{}
-	}
-	if _, set := given[cnab.ParameterOrchestrator]; set {
-		return nil, fmt.Errorf("parameter %s comes from the target, it can't be given", cnab.ParameterOrchestrator)
-	}
-	if _, declared := bundle.Parameters[cnab.ParameterOrchestrator]; declared {
-		given[cnab.ParameterOrchestrator] = request.Target.Orchestrator
-	}
-	if _, set := given[cnab.ParameterVolumes]; set {
-		return nil, fmt.Errorf("parameter %s comes from the target, it can't be given", cnab.ParameterVolumes)
-	}
-	if _, set := given[cnab.ParameterRegistryAuth]; set {
-		return nil, fmt.Errorf("parameter %s comes from docker login, it can't be given", cnab.ParameterRegistryAuth)
-	}
-	if _, declared := bundle.Parameters[cnab.ParameterRegistryAuth]; declared && registryAuth != "" {
-		given[cnab.ParameterRegistryAuth] = registryAuth
-	}
-	if _, declared := bundle.Parameters[cnab.ParameterVolumes]; declared && len(request.Target.Volumes) > 0 {
-		volumes, err := json.Marshal(request.Target.Volumes)
-		if err != nil {
-			return nil, err
-		}
-		given[cnab.ParameterVolumes] = string(volumes)
+	given, err := withOwnParameters(request, registryAuth)
+	if err != nil {
+		return nil, err
 	}
 
 	var errs []error
