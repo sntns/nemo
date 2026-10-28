@@ -10,23 +10,39 @@ import (
 )
 
 // Installations returns the installations of the stack, as nemo keeps them.
-func (nemo *Nemo) Installations(ctx context.Context, stack string) ([]storage.Installation, error) {
-	return nemo.store.ListInstallations(ctx, stack)
+func (nemo *Nemo) Installations(ctx context.Context, stack string) (_ []storage.Installation, err error) {
+	done, err := nemo.open(ctx, nil, stack, false)
+	if err != nil {
+		return nil, err
+	}
+	defer release(done, &err)
+	return nemo.records(stack).ListInstallations(ctx, stack)
 }
 
 // Installation returns an installation, as nemo keeps it.
-func (nemo *Nemo) Installation(ctx context.Context, stack, name string) (storage.Installation, error) {
-	return nemo.store.GetInstallation(ctx, stack, name)
+func (nemo *Nemo) Installation(ctx context.Context, stack, name string) (_ storage.Installation, err error) {
+	done, err := nemo.open(ctx, nil, stack, false)
+	if err != nil {
+		return storage.Installation{}, err
+	}
+	defer release(done, &err)
+	return nemo.records(stack).GetInstallation(ctx, stack, name)
 }
 
 // Runs returns the actions of an installation, oldest first, each as up
 // and the actions return it: its claim, with its result and outputs.
-func (nemo *Nemo) Runs(ctx context.Context, stack, name string) ([]Run, error) {
-	claims, err := nemo.store.ListRuns(ctx, stack, name)
+func (nemo *Nemo) Runs(ctx context.Context, stack, name string) (_ []Run, err error) {
+	done, err := nemo.open(ctx, nil, stack, false)
 	if err != nil {
 		return nil, err
 	}
-	results, err := nemo.store.ListResults(ctx, stack, name)
+	defer release(done, &err)
+	records := nemo.records(stack)
+	claims, err := records.ListRuns(ctx, stack, name)
+	if err != nil {
+		return nil, err
+	}
+	results, err := records.ListResults(ctx, stack, name)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +68,7 @@ func (nemo *Nemo) Runs(ctx context.Context, stack, name string) ([]Run, error) {
 		if index := slices.IndexFunc(results, func(result cnab.Result) bool { return result.ClaimID == claim.ID }); index >= 0 {
 			result := results[index]
 			run.Status, run.Ended = result.Status, result.Created
-			if run.Outputs, err = nemo.store.GetOutputs(ctx, stack, name, result.ID); err != nil {
+			if run.Outputs, err = records.GetOutputs(ctx, stack, name, result.ID); err != nil {
 				return nil, err
 			}
 		}

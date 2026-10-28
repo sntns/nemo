@@ -22,6 +22,7 @@ import (
 	"github.com/sntns/nemo/pkg/bundle"
 	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/nemo"
+	"github.com/sntns/nemo/pkg/stack"
 	"github.com/sntns/nemo/pkg/target"
 )
 
@@ -197,6 +198,7 @@ func up() *cobra.Command {
 		file  string
 		name  string
 		purge bool
+		force bool
 	)
 	command := &cobra.Command{
 		Use:   "up [INSTALLATION...]",
@@ -215,7 +217,7 @@ func up() *cobra.Command {
 			if err = ensureSwarm(command.Context(), loaded.Target, command.ErrOrStderr()); err != nil {
 				return err
 			}
-			api, err := nemo.New(nemo.Options{})
+			api, err := nemo.New(nemo.Options{Force: force})
 			if err != nil {
 				return err
 			}
@@ -227,6 +229,7 @@ func up() *cobra.Command {
 	command.Flags().StringVarP(&file, "file", "f", "", "a stack's manifest, instead of a stack nemo keeps")
 	command.Flags().StringVar(&name, "stack", "", "a stack nemo keeps (default: the current one)")
 	command.Flags().BoolVar(&purge, "purge", false, "also remove the volumes of the bundles the stack no longer has")
+	command.Flags().BoolVar(&force, "force", false, "write a stack another tool manages, Terraform: its next run undoes it")
 	command.Flags().Bool("json", false, "print the record of the runs as JSON on stdout")
 	return command
 }
@@ -238,6 +241,7 @@ func down() *cobra.Command {
 		file  string
 		name  string
 		purge bool
+		force bool
 	)
 	command := &cobra.Command{
 		Use:     "down",
@@ -248,25 +252,27 @@ func down() *cobra.Command {
 			if file != "" && name != "" {
 				return errors.New("give the stack file or the stack's name, not both")
 			}
+			var manifest *stack.Stack
 			if file != "" || name == "" {
 				loaded, err := chosenStack(file, "")
 				if err != nil {
 					return err
 				}
-				name = loaded.Name
+				name, manifest = loaded.Name, &loaded
 			}
-			api, err := nemo.New(nemo.Options{})
+			api, err := nemo.New(nemo.Options{Force: force})
 			if err != nil {
 				return err
 			}
 			events, stop := newRenderer(os.Stderr, name)
-			result, err := api.Down(command.Context(), nemo.DownRequest{Name: name, Purge: purge, Progress: events})
+			result, err := api.Down(command.Context(), nemo.DownRequest{Name: name, Manifest: manifest, Purge: purge, Progress: events})
 			return render(command, result, stop(err))
 		},
 	}
 	command.Flags().StringVarP(&file, "file", "f", "", "a stack's manifest")
 	command.Flags().StringVar(&name, "stack", "", "name of the stack (default: the current one)")
 	command.Flags().BoolVar(&purge, "purge", false, "also remove the volumes")
+	command.Flags().BoolVar(&force, "force", false, "write a stack another tool manages, Terraform: its next run undoes it")
 	command.Flags().Bool("json", false, "print the record of the runs as JSON on stdout")
 	return command
 }
@@ -292,6 +298,7 @@ func action(name, short, example string, call func(*nemo.Nemo, context.Context, 
 		request         nemo.ActionRequest
 		parameters      []string
 		credentialFlags []string
+		force           bool
 		namespace       string
 		kubeconfig      string
 		volumes         string
@@ -340,7 +347,7 @@ func action(name, short, example string, call func(*nemo.Nemo, context.Context, 
 			if request.Installer.Driver == target.DriverKubernetes {
 				request.Installer.Kubernetes = &target.Kubernetes{Namespace: namespace, Kubeconfig: kubeconfig}
 			}
-			api, err := nemo.New(nemo.Options{})
+			api, err := nemo.New(nemo.Options{Force: force})
 			if err != nil {
 				return err
 			}
@@ -367,6 +374,7 @@ func action(name, short, example string, call func(*nemo.Nemo, context.Context, 
 	flags.StringVar(&namespace, "kubernetes-namespace", "", "namespace of the Job, with --driver kubernetes")
 	flags.StringVar(&kubeconfig, "kubeconfig", "", "kubeconfig of the cluster, with --driver kubernetes (default: KUBECONFIG, ~/.kube/config, else the cluster nemo runs in)")
 	flags.StringArrayVar(&parameters, "param", nil, "parameter value, NAME=VALUE, over the installation's (repeatable)")
+	flags.BoolVar(&force, "force", false, "write a stack another tool manages, Terraform: its next run undoes it")
 	flags.StringArrayVar(&credentialFlags, "credential", nil, "credential source, NAME=KEY:VALUE with KEY a CNAB source, path, env, command or value, over the installation's (repeatable)")
 	return command
 }

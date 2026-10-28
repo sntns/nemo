@@ -106,7 +106,17 @@ nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), an
 | `nemo stack use NAME` | Makes a stack the current one. |
 | `nemo stack inspect [NAME]` | Prints a stack's manifest. |
 | `nemo stack set [NAME]` | Changes a stack's remote, parameters (`--param NAME=VALUE`) or credentials (`--credential NAME=SOURCE:VALUE`). |
-| `nemo stack remove NAME` | Forgets a stack, its manifest and its installations' records. Only once nothing of it is installed. |
+| `nemo stack remove NAME` | Forgets a stack, its manifest and its installations' records. Only once nothing of it is installed. A stack whose records are on its target is only forgotten here: its records stay there. |
+
+### Records on the target
+
+nemo keeps the records of a stack's installations, their state and every action run on them, with its manifest in its home. A stack deployed from a CI job, or by several people, keeps them on its target instead, with `records: target` in its manifest: every home that imports the manifest then sees the same installations. `nemo status` on a laptop shows what the CI deployed, and an upgrade from there upgrades the same installations.
+
+They are in a volume of the target, `nemo-records-<stack>`, which nemo creates the first time. nemo reaches it through a container that never starts, of an empty image it makes on the target, `nemo-records:1`: Docker copies the records in and out of it over the connection nemo already has, with nothing running and no port open. The volume is local to the Docker nemo reaches: on a swarm of several managers, reach the stack through the same one.
+
+One nemo writes a stack at a time: the container of the one writing is named after the stack, and another nemo writing it meanwhile stops, the stack busy. A nemo killed while writing leaves it; `docker rm nemo-records-<stack>` on the target frees the stack. Reading never waits.
+
+A stack Terraform manages refuses to be written by nemo, which says so: `up`, `down` and the actions on its installations change it only with `--force`, which Terraform undoes at its next apply. Reading it works as for any stack.
 
 ### The editor
 

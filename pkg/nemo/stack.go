@@ -31,6 +31,9 @@ type UpRequest struct {
 // DownRequest removes a stack, by its name.
 type DownRequest struct {
 	Name string
+	// Manifest is the stack's, when nemo does not keep it: it says where
+	// the records of its installations are.
+	Manifest *stack.Stack
 	// Purge also removes the volumes.
 	Purge    bool
 	Progress progress.Sink
@@ -46,7 +49,12 @@ type StackResult struct {
 // stack whose bundle it no longer has, dependants first. It checks every
 // bundle that has a validate action first, and stops at the first action
 // that fails.
-func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (StackResult, error) {
+func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err error) {
+	done, err := nemo.open(ctx, &request.Stack, request.Stack.Name, true)
+	if err != nil {
+		return StackResult{}, err
+	}
+	defer release(done, &err)
 	plan, err := nemo.planUp(ctx, request)
 	if err != nil {
 		return StackResult{}, err
@@ -310,7 +318,12 @@ type stackEntry struct {
 // Down uninstalls every installation of the stack, dependants first. It
 // needs nothing but the stack's name: the rest comes from the installations.
 // A stack with nothing installed is already down.
-func (nemo *Nemo) Down(ctx context.Context, request DownRequest) (StackResult, error) {
+func (nemo *Nemo) Down(ctx context.Context, request DownRequest) (_ StackResult, err error) {
+	done, err := nemo.open(ctx, request.Manifest, request.Name, true)
+	if err != nil {
+		return StackResult{}, err
+	}
+	defer release(done, &err)
 	present, err := nemo.present(ctx, request.Name)
 	if err != nil {
 		return StackResult{}, err
@@ -323,7 +336,7 @@ func (nemo *Nemo) Down(ctx context.Context, request DownRequest) (StackResult, e
 // the target, by bundle name: all but the uninstalled, those whose install
 // failed included.
 func (nemo *Nemo) present(ctx context.Context, stackName string) (map[string]storage.Installation, error) {
-	installations, err := nemo.store.ListInstallations(ctx, stackName)
+	installations, err := nemo.records(stackName).ListInstallations(ctx, stackName)
 	if err != nil {
 		return nil, err
 	}

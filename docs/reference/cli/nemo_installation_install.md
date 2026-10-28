@@ -20,6 +20,7 @@ nemo installation install [INSTALLATION] [flags]
       --credential stringArray        credential source, NAME=KEY:VALUE with KEY a CNAB source, path, env, command or value, over the installation's (repeatable)
       --driver string                 where the invocation image runs: docker, on the target; or kubernetes, as a Job in a cluster that reaches the target over tcp:// (default: the installation's, else docker)
   -f, --file string                   the bundle: a bundle.json, or where it was pushed, docker://REFERENCE or oci:PATH (default: the installation's)
+      --force                         write a stack another tool manages, Terraform: its next run undoes it
   -h, --help                          help for install
       --host string                   address of the target's Docker: unix://, tcp:// or ssh://user@host (default: the installation's, else the environment's)
       --images string                 how the images reach the target: registry, which the target pulls from, or load, into its daemon with no registry (default: the installation's, else registry)

@@ -92,8 +92,13 @@ func (nemo *Nemo) Status(ctx context.Context, stack string) (StackStatus, error)
 
 // stackOf returns the installations of the stack, and the target they are
 // deployed on: a stack has one.
-func (nemo *Nemo) stackOf(ctx context.Context, stack string) ([]storage.Installation, target.Target, error) {
-	installations, err := nemo.store.ListInstallations(ctx, stack)
+func (nemo *Nemo) stackOf(ctx context.Context, stack string) (_ []storage.Installation, _ target.Target, err error) {
+	done, err := nemo.open(ctx, nil, stack, false)
+	if err != nil {
+		return nil, target.Target{}, err
+	}
+	defer release(done, &err)
+	installations, err := nemo.records(stack).ListInstallations(ctx, stack)
 	if err != nil {
 		return nil, target.Target{}, err
 	}
