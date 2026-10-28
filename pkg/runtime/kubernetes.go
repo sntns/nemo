@@ -183,44 +183,70 @@ func (kubernetesDriver *kubernetesDriver) objects(operation *driver.Operation) (
 }
 
 // follow streams the logs of the Job's pod once it runs, then waits for the
-// Job to succeed or fail. A pod that can't pull its image fails it.
+// Job to succeed or fail.
 func (kubernetesDriver *kubernetesDriver) follow(ctx context.Context, jobName string, output io.Writer) error {
+	podName, err := kubernetesDriver.started(ctx, jobName)
+	if err != nil {
+		return err
+	}
+	if err := kubernetesDriver.stream(ctx, podName, output); err != nil {
+		return fmt.Errorf("reading the installer's output: %w", err)
+	}
+	return kubernetesDriver.finished(ctx, jobName)
+}
+
+// started waits for the Job's pod to leave Pending, and returns its name. A
+// pod that can't pull its image fails the Job.
+func (kubernetesDriver *kubernetesDriver) started(ctx context.Context, jobName string) (string, error) {
 	pods := kubernetesDriver.client.CoreV1().Pods(kubernetesDriver.namespace)
-	var podName string
-	for podName == "" {
+	for {
 		list, err := pods.List(ctx, metav1.ListOptions{LabelSelector: "job-name=" + jobName})
 		if err != nil {
-			return err
+			return "", err
 		}
 		for _, pod := range list.Items {
-			if pod.Status.Phase != corev1.PodPending {
-				podName = pod.Name
+			if err := pullFailure(pod); err != nil {
+				return "", err
 			}
-			for _, status := range pod.Status.ContainerStatuses {
-				if waiting := status.State.Waiting; waiting != nil && (waiting.Reason == "ErrImagePull" || waiting.Reason == "ImagePullBackOff" || waiting.Reason == "InvalidImageName") {
-					return fmt.Errorf("the cluster can't pull the installer's image %s: %s", status.Image, waiting.Message)
-				}
+			if pod.Status.Phase != corev1.PodPending {
+				return pod.Name, nil
 			}
 		}
-		if podName == "" {
-			if err := sleep(ctx); err != nil {
-				return err
-			}
+		if err := sleep(ctx); err != nil {
+			return "", err
 		}
 	}
+}
 
+var pullFailures = []string{"ErrImagePull", "ImagePullBackOff", "InvalidImageName"}
+
+// pullFailure is why the cluster can't pull the pod's image, when it can't.
+func pullFailure(pod corev1.Pod) error {
+	for _, status := range pod.Status.ContainerStatuses {
+		if waiting := status.State.Waiting; waiting != nil && slices.Contains(pullFailures, waiting.Reason) {
+			return fmt.Errorf("the cluster can't pull the installer's image %s: %s", status.Image, waiting.Message)
+		}
+	}
+	return nil
+}
+
+// stream copies the installer's output until the pod ends.
+func (kubernetesDriver *kubernetesDriver) stream(ctx context.Context, podName string, output io.Writer) error {
+	pods := kubernetesDriver.client.CoreV1().Pods(kubernetesDriver.namespace)
 	logs, err := pods.GetLogs(podName, &corev1.PodLogOptions{Container: "invocation", Follow: true}).Stream(ctx)
 	if err != nil {
-		return fmt.Errorf("reading the installer's output: %w", err)
+		return err
 	}
+	defer logs.Close()
 	_, err = io.Copy(output, logs)
-	logs.Close()
-	if err != nil {
-		return fmt.Errorf("reading the installer's output: %w", err)
-	}
+	return err
+}
 
+// finished waits for the Job to succeed or fail.
+func (kubernetesDriver *kubernetesDriver) finished(ctx context.Context, jobName string) error {
+	jobs := kubernetesDriver.client.BatchV1().Jobs(kubernetesDriver.namespace)
 	for {
-		job, err := kubernetesDriver.client.BatchV1().Jobs(kubernetesDriver.namespace).Get(ctx, jobName, metav1.GetOptions{})
+		job, err := jobs.Get(ctx, jobName, metav1.GetOptions{})
 		if err != nil {
 			return err
 		}
