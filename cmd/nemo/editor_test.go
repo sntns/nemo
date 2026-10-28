@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -260,4 +261,25 @@ func TestWindow(t *testing.T) {
 	assert.Contains(t, ansi.Strip(shown[0]), "↑ 7 more")
 	assert.Empty(t, shown[4], "nothing below")
 	assert.Equal(t, []string{"4", "5", "6"}, window(lines, 5, 5)[1:4], "the cursor in the middle")
+}
+
+func TestEditor_reviewShowsTheInstallationsValues(t *testing.T) {
+	t.Parallel()
+	imported := stack.Stack{
+		Name:       "shop",
+		Remote:     "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}",
+		Target:     target.Target{Orchestrator: target.Swarm},
+		Parameters: map[string]string{"region": "eu5"},
+		Installations: []storage.InstallationSpec{{
+			Name: "web", Stack: "shop", Bundle: storage.BundleReference{Version: "1.1.0"},
+			Parameters:  map[string]string{"region": "eu6"},
+			Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "value", Value: "secret"}}},
+		}},
+	}
+	e := shopEditor(imported, modeEdit, true)
+	drain(e, e.Init())
+	lines := e.reviewLines()
+	index := slices.IndexFunc(lines, func(line reviewLine) bool { return line.label == "web" })
+	require.GreaterOrEqual(t, index, 0)
+	assert.Equal(t, "1.1.0 · region eu6 · token value ••••••••", lines[index].value, "over the stack's, the value hidden")
 }

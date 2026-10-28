@@ -1100,8 +1100,8 @@ func (e *editor) reviewLines() []reviewLine {
 	bundles := e.problems(stepBundles)
 	lines = append(lines, opening(reviewLine{label: "Bundles", value: cmp.Or(e.stack.Remote, "not given"), problem: len(bundles) > 0}, screenSource, ""))
 	for _, installation := range e.stack.Installations {
-		reference := cmp.Or(installation.Bundle.File, installation.Bundle.Repository, "")
-		lines = append(lines, reviewLine{label: installation.Name, value: strings.TrimSpace(reference + " " + installation.Bundle.Version), indent: true})
+		reference := strings.TrimSpace(cmp.Or(installation.Bundle.File, installation.Bundle.Repository, "") + " " + installation.Bundle.Version)
+		lines = append(lines, reviewLine{label: installation.Name, value: strings.Join(slices.Concat([]string{reference}, ownValues(installation)), " · "), indent: true})
 	}
 	if loading := cmp.Or(e.loading["bundles"], e.loading["layouts"]); loading != "" {
 		lines = append(lines, reviewLine{label: e.spin.View() + " " + loading, indent: true})
@@ -1143,10 +1143,7 @@ func (e *editor) reviewLines() []reviewLine {
 			_, required := e.credential(name)
 			value, missing := "not given", required
 			if strategy, given := e.strategy(name); given {
-				value, missing = strategy.Source.Key+" "+strategy.Source.Value, false
-				if strategy.Source.Key == host.SourceValue {
-					value = host.SourceValue + " " + strings.Repeat("•", 8)
-				}
+				value, missing = sourceSummary(strategy), false
 			} else if required {
 				value = "required, missing"
 			}
@@ -1155,6 +1152,27 @@ func (e *editor) reviewLines() []reviewLine {
 	}
 	verb := map[editMode]string{modeCreate: "Create", modeEdit: "Save", modeImport: "Import"}[e.mode]
 	return append(lines, reviewLine{label: verb + " " + cmp.Or(e.stack.Name, "the stack"), save: true})
+}
+
+// ownValues are the values an installation has of its own, over the
+// stack's: the manifest gives them, the editor shows them.
+func ownValues(installation storage.InstallationSpec) []string {
+	var values []string
+	for _, name := range slices.Sorted(maps.Keys(installation.Parameters)) {
+		values = append(values, name+" "+installation.Parameters[name])
+	}
+	for _, strategy := range installation.Credentials {
+		values = append(values, strategy.Name+" "+sourceSummary(strategy))
+	}
+	return values
+}
+
+// sourceSummary is where a credential is read from, its value hidden.
+func sourceSummary(strategy valuesource.Strategy) string {
+	if strategy.Source.Key == host.SourceValue {
+		return host.SourceValue + " " + strings.Repeat("•", 8)
+	}
+	return strategy.Source.Key + " " + strategy.Source.Value
 }
 
 var (
