@@ -708,17 +708,49 @@ func (e *editor) keep() {
 }
 
 // submit checks the screen's answer, records it in the stack, and goes on.
+// On the review, it opens the step of the line, or saves.
 func (e *editor) submit() (tea.Model, tea.Cmd) {
-	value := strings.TrimSpace(e.input.Value())
-	var cmd tea.Cmd
-	var err error
+	if e.screen().kind == screenReview {
+		return e.submitReview()
+	}
+	cmd, err := e.accept(strings.TrimSpace(e.input.Value()))
+	if err != nil {
+		e.problem = err.Error()
+		return e, nil
+	}
+	e.advance()
+	return e, cmd
+}
+
+// submitReview opens the step of the review's line, or saves the stack
+// once no step is incomplete.
+func (e *editor) submitReview() (tea.Model, tea.Cmd) {
+	line := e.reviewLines()[e.cursor]
+	switch {
+	case line.save && len(e.problems(stepReview)) > 0:
+		e.problem = "complete the steps marked ! first"
+	case line.save:
+		e.saved = true
+		return e, tea.Quit
+	case line.opens:
+		e.at, e.reviewed = line.screen, true
+		e.enter()
+	}
+	return e, nil
+}
+
+// accept checks the answer of the screen and records it in the stack. It
+// returns what the answer starts: listing versions, scanning the layouts,
+// loading the bundles.
+func (e *editor) accept(value string) (tea.Cmd, error) {
 	switch screen := e.screen(); screen.kind {
 	case screenName:
-		if err = e.nameProblem(value); err == nil {
-			e.stack.Name = value
-			for i := range e.stack.Installations {
-				e.stack.Installations[i].Stack = value
-			}
+		if err := e.nameProblem(value); err != nil {
+			return nil, err
+		}
+		e.stack.Name = value
+		for i := range e.stack.Installations {
+			e.stack.Installations[i].Stack = value
 		}
 	case screenSource:
 		e.from = e.sources()[e.cursor]
@@ -726,83 +758,75 @@ func (e *editor) submit() (tea.Model, tea.Cmd) {
 			e.directory = workingDirectory()
 		}
 	case screenNamespace:
-		if err = registryNamespace(value); err == nil {
-			e.namespace = strings.TrimSuffix(value, "/")
-			e.stack.Remote = "docker://" + e.namespace + "/{{ .Component }}:{{ .Version }}"
-			cmd = e.listVersions()
+		if err := registryNamespace(value); err != nil {
+			return nil, err
 		}
+		e.namespace = strings.TrimSuffix(value, "/")
+		e.stack.Remote = "docker://" + e.namespace + "/{{ .Component }}:{{ .Version }}"
+		return e.listVersions(), nil
 	case screenDirectory:
 		if value == "" {
-			err = errors.New("required")
-			break
+			return nil, errors.New("required")
 		}
-		if e.directory, err = filepath.Abs(value); err == nil {
-			e.stack.Remote = "oci:" + filepath.Join(e.directory, "{{ .Component }}.oci")
-			cmd = e.scanLayouts()
+		directory, err := filepath.Abs(value)
+		if err != nil {
+			return nil, err
 		}
+		e.directory = directory
+		e.stack.Remote = "oci:" + filepath.Join(e.directory, "{{ .Component }}.oci")
+		return e.scanLayouts(), nil
 	case screenNames:
-		if err = e.setNames(value); err == nil {
-			cmd = e.listVersions()
+		if err := e.setNames(value); err != nil {
+			return nil, err
 		}
+		return e.listVersions(), nil
 	case screenLayouts:
-		err = e.setLayouts()
+		return nil, e.setLayouts()
 	case screenVersion:
-		version := value
-		if len(e.versions) > 0 {
-			version = e.versions[e.cursor]
-		}
-		if version == "" {
-			err = errors.New("required")
-			break
-		}
-		e.version = version
-		for i := range e.stack.Installations {
-			if reference := &e.stack.Installations[i].Bundle; reference.File == "" && reference.Repository == "" {
-				reference.Version = version
-			}
-		}
-		cmd = e.loadBundles()
+		return e.acceptVersion(value)
 	case screenOrchestrator:
 		e.stack.Target.Orchestrator = []string{target.Swarm, target.Compose}[e.cursor]
 	case screenImages:
 		e.stack.Target.Images = []string{target.ImagesRegistry, target.ImagesLoad}[e.cursor]
 	case screenParameter:
 		if _, _, required := e.parameter(screen.name); required && value == "" {
-			err = errors.New("required")
-			break
+			return nil, errors.New("required")
 		}
 		e.setParameter(screen.name, value)
 	case screenCredential:
-		err = e.setCredential(screen.name, value)
-	case screenReview:
-		line := e.reviewLines()[e.cursor]
-		switch {
-		case line.save && len(e.problems(stepReview)) > 0:
-			err = errors.New("complete the steps marked ! first")
-		case line.save:
-			e.saved = true
-			return e, tea.Quit
-		case line.opens:
-			e.at, e.reviewed = line.screen, true
-			e.enter()
-		}
-		if err != nil {
-			e.problem = err.Error()
-		}
-		return e, nil
+		return nil, e.setCredential(screen.name, value)
 	}
-	if err != nil {
-		e.problem = err.Error()
-		return e, nil
+	return nil, nil
+}
+
+// acceptVersion takes the version chosen, or typed when the remote lists
+// none, for every bundle not given by its file or repository, and loads them.
+func (e *editor) acceptVersion(value string) (tea.Cmd, error) {
+	version := value
+	if len(e.versions) > 0 {
+		version = e.versions[e.cursor]
 	}
-	// A step opened from the review goes back to it once done.
+	if version == "" {
+		return nil, errors.New("required")
+	}
+	e.version = version
+	for i := range e.stack.Installations {
+		if reference := &e.stack.Installations[i].Bundle; reference.File == "" && reference.Repository == "" {
+			reference.Version = version
+		}
+	}
+	return e.loadBundles(), nil
+}
+
+// advance goes to the next screen: back to the review once a step opened
+// from it is done.
+func (e *editor) advance() {
 	if screens := e.screens(); e.reviewed && e.index()+1 < len(screens) && screens[e.index()+1].step != e.at.step {
 		e.at, e.reviewed = screen{kind: screenReview, step: stepReview}, false
 		e.enter()
-		return e, cmd
+		return
 	}
 	e.move(1)
-	return e, cmd
 }
 
 // setNames keeps the installations of the bundles named, as they were, and

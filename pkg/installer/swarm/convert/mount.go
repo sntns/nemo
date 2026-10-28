@@ -29,6 +29,7 @@ func Mounts(service types.ServiceConfig, volumes types.Volumes, base map[string]
 	return result, nil
 }
 
+// serviceMount converts a volume of a service to the mount of its type.
 func serviceMount(volume types.ServiceVolumeConfig, volumes types.Volumes, base map[string]string) (mount.Mount, error) {
 	result := mount.Mount{
 		Type:        mount.Type(volume.Type),
@@ -39,57 +40,76 @@ func serviceMount(volume types.ServiceVolumeConfig, volumes types.Volumes, base 
 	}
 	switch volume.Type {
 	case types.VolumeTypeVolume, "":
-		result.Type = mount.TypeVolume
-		if volume.Tmpfs != nil || volume.Bind != nil {
-			return mount.Mount{}, errors.New("tmpfs and bind options are incompatible with type volume")
-		}
-		if volume.Source == "" {
-			return result, nil
-		}
-		declared, ok := volumes[volume.Source]
-		if !ok {
-			return mount.Mount{}, fmt.Errorf("undefined volume %q", volume.Source)
-		}
-		result.Source = declared.Name
-		result.VolumeOptions = &mount.VolumeOptions{}
-		if volume.Volume != nil {
-			result.VolumeOptions.NoCopy = volume.Volume.NoCopy
-			result.VolumeOptions.Subpath = volume.Volume.Subpath
-		}
-		if bool(declared.External) {
-			return result, nil
-		}
-		// Swarm creates the volume on every node that runs a task, with these options.
-		result.VolumeOptions.Labels = labels.Merge(declared.Labels, base)
-		if declared.Driver != "" || declared.DriverOpts != nil {
-			result.VolumeOptions.DriverConfig = &mount.Driver{Name: declared.Driver, Options: declared.DriverOpts}
-		}
+		return volumeMount(result, volume, volumes, base)
 	case types.VolumeTypeBind:
-		if volume.Source == "" {
-			return mount.Mount{}, errors.New("a bind mount needs a source")
-		}
-		if volume.Volume != nil || volume.Tmpfs != nil {
-			return mount.Mount{}, errors.New("volume and tmpfs options are incompatible with type bind")
-		}
-		if volume.Bind != nil {
-			result.BindOptions = &mount.BindOptions{Propagation: mount.Propagation(volume.Bind.Propagation)}
-		}
+		return bindMount(result, volume)
 	case types.VolumeTypeTmpfs:
-		if volume.Source != "" {
-			return mount.Mount{}, errors.New("a tmpfs mount has no source")
-		}
-		if volume.Volume != nil || volume.Bind != nil {
-			return mount.Mount{}, errors.New("volume and bind options are incompatible with type tmpfs")
-		}
-		if volume.Tmpfs != nil {
-			result.TmpfsOptions = &mount.TmpfsOptions{SizeBytes: int64(volume.Tmpfs.Size), Mode: os.FileMode(volume.Tmpfs.Mode)}
-		}
+		return tmpfsMount(result, volume)
 	case types.VolumeTypeNamedPipe:
-		if volume.Source == "" {
-			return mount.Mount{}, errors.New("a named pipe mount needs a source")
-		}
-	default:
-		return mount.Mount{}, fmt.Errorf("type %q is not supported by swarm", volume.Type)
+		return namedPipeMount(result, volume)
+	}
+	return mount.Mount{}, fmt.Errorf("type %q is not supported by swarm", volume.Type)
+}
+
+// volumeMount mounts a volume of the project, or an anonymous one without a source. Swarm creates
+// a volume of the project on every node that runs a task, with its labels and driver.
+func volumeMount(result mount.Mount, volume types.ServiceVolumeConfig, volumes types.Volumes, base map[string]string) (mount.Mount, error) {
+	result.Type = mount.TypeVolume
+	if volume.Tmpfs != nil || volume.Bind != nil {
+		return mount.Mount{}, errors.New("tmpfs and bind options are incompatible with type volume")
+	}
+	if volume.Source == "" {
+		return result, nil
+	}
+	declared, ok := volumes[volume.Source]
+	if !ok {
+		return mount.Mount{}, fmt.Errorf("undefined volume %q", volume.Source)
+	}
+	result.Source = declared.Name
+	result.VolumeOptions = &mount.VolumeOptions{}
+	if volume.Volume != nil {
+		result.VolumeOptions.NoCopy = volume.Volume.NoCopy
+		result.VolumeOptions.Subpath = volume.Volume.Subpath
+	}
+	if declared.External {
+		return result, nil
+	}
+	result.VolumeOptions.Labels = labels.Merge(declared.Labels, base)
+	if declared.Driver != "" || declared.DriverOpts != nil {
+		result.VolumeOptions.DriverConfig = &mount.Driver{Name: declared.Driver, Options: declared.DriverOpts}
+	}
+	return result, nil
+}
+
+func bindMount(result mount.Mount, volume types.ServiceVolumeConfig) (mount.Mount, error) {
+	if volume.Source == "" {
+		return mount.Mount{}, errors.New("a bind mount needs a source")
+	}
+	if volume.Volume != nil || volume.Tmpfs != nil {
+		return mount.Mount{}, errors.New("volume and tmpfs options are incompatible with type bind")
+	}
+	if volume.Bind != nil {
+		result.BindOptions = &mount.BindOptions{Propagation: mount.Propagation(volume.Bind.Propagation)}
+	}
+	return result, nil
+}
+
+func tmpfsMount(result mount.Mount, volume types.ServiceVolumeConfig) (mount.Mount, error) {
+	if volume.Source != "" {
+		return mount.Mount{}, errors.New("a tmpfs mount has no source")
+	}
+	if volume.Volume != nil || volume.Bind != nil {
+		return mount.Mount{}, errors.New("volume and bind options are incompatible with type tmpfs")
+	}
+	if volume.Tmpfs != nil {
+		result.TmpfsOptions = &mount.TmpfsOptions{SizeBytes: int64(volume.Tmpfs.Size), Mode: os.FileMode(volume.Tmpfs.Mode)}
+	}
+	return result, nil
+}
+
+func namedPipeMount(result mount.Mount, volume types.ServiceVolumeConfig) (mount.Mount, error) {
+	if volume.Source == "" {
+		return mount.Mount{}, errors.New("a named pipe mount needs a source")
 	}
 	return result, nil
 }
