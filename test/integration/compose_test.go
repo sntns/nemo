@@ -77,7 +77,6 @@ services:
 }
 
 func TestCompose_failsOnAServiceThatExitsWithoutRestart(t *testing.T) {
-	t.Skip("compose declares a service up once its container ran, while it may already have exited: this passes or fails with the timing")
 	b := newBench(t, compose.Name)
 
 	err := b.install(`

@@ -118,9 +118,6 @@ volumes:
 // them, then an upgrade rotates the secret they read.
 func TestBoth_lifecycleOfServicesWaitingForTheirBroker(t *testing.T) {
 	onBoth(t, func(t *testing.T, b *bench) {
-		if b.orchestrator != nemoswarm.Name {
-			t.Skip("compose declares a service up once its container ran, while it may still exit and restart: it has no monitor period to wait for, as Swarm does")
-		}
 		project := fmt.Sprintf(`
 services:
   broker:

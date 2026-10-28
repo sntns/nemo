@@ -217,7 +217,7 @@ services:
       back: {}
   check:
     image: busybox:1.37
-    command: ["sh", "-c", "nslookup www && ip -o addr | grep -q 10.231. || exit 1; exec sleep 3600"]
+    command: ["sh", "-c", "for i in $$(seq 30); do nslookup www >/dev/null 2>&1 && break; sleep 1; done; nslookup www && ip -o addr | grep -q 10.231. || exit 1; exec sleep 3600"]
     depends_on: [web]
     deploy:
       endpoint_mode: dnsrr

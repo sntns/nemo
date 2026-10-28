@@ -254,6 +254,8 @@ func TestStack_upAndDown(t *testing.T) {
 			_, err = s.nemo("down", "--purge")
 			require.NoError(t, err)
 			s.assertNothingLeft()
+			_, err = s.nemo("down", "--purge")
+			assert.NoError(t, err, "a stack already down")
 		})
 	}
 }
@@ -276,9 +278,6 @@ func TestStack_checksEveryBundleBeforeInstallingAny(t *testing.T) {
 func TestStack_downRemovesAStackThatFailedHalfway(t *testing.T) {
 	for _, orchestrator := range []string{"compose", "swarm"} {
 		t.Run(orchestrator, func(t *testing.T) {
-			if orchestrator == "compose" {
-				t.Skip("compose declares a service up once its container ran, while it may already have exited: it has no monitor period to wait for, as Swarm does")
-			}
 			s := newStack(t)
 			s.importManifest(orchestrator, freePort(t), "broker", "stuck")
 
