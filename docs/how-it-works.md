@@ -62,7 +62,7 @@ sequenceDiagram
 - With `images: load`, nemo loads the bundle's images into the target's Docker, for its platform only. Each is tagged after its digest, so a new build is a new image.
 - nemo starts gill on the target with the Docker socket mounted, the bundle, the parameters and the credentials, as the CNAB specification describes. It reads gill's events as they come, and shows them.
 - gill fills the compose project with the parameters, pins each image to its digest, and applies it with the orchestrator the target names:
-  - **Compose** creates the networks and volumes, then the containers, one level of `depends_on` at a time, waiting at each level for the condition the dependants ask for: started, healthy, or completed. A container whose configuration did not change is kept.
+  - **Compose** creates the networks and volumes, then the containers, one level of `depends_on` at a time, waiting at each level for the condition the dependants ask for: started, healthy, or completed. A started or healthy container must then stay up for 5 seconds without the daemon restarting it, so that one that starts then exits is caught. A container whose configuration did not change is kept.
   - **Swarm** creates the networks, volumes, configs and secrets, then creates or updates each service, waits until its tasks converge, and watches them for a moment to make sure they stay up. Configs and secrets are named after their content, so a change rolls the services that use them.
 - nemo records the run: the claim (what ran, with which bundle and parameters), its result, and its outputs.
 

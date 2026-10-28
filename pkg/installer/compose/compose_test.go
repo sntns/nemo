@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/moby/moby/api/types/container"
@@ -64,6 +65,22 @@ func TestReached(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A container counts as up once it ran for steadyFor without starting again: one that
+// exits, or that the daemon restarts, starts the count over.
+func TestSteadiness(t *testing.T) {
+	t.Parallel()
+	start := time.Now()
+	first := &container.State{Running: true, StartedAt: "2026-10-28T00:00:00Z"}
+	restarted := &container.State{Running: true, StartedAt: "2026-10-28T00:00:07Z"}
+
+	var steady steadiness
+	assert.False(t, steady.held(first, start), "just started")
+	assert.False(t, steady.held(first, start.Add(steadyFor-time.Second)), "not long enough")
+	assert.True(t, steady.held(first, start.Add(steadyFor)), "up for steadyFor")
+	assert.False(t, steady.held(restarted, start.Add(steadyFor+2*time.Second)), "restarted: the count starts over")
+	assert.True(t, steady.held(restarted, start.Add(2*steadyFor+2*time.Second)))
 }
 
 func TestValidate_swarmSettingsAreWarnings(t *testing.T) {
