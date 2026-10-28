@@ -120,7 +120,8 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	}
 	built.InvocationImages = []bundle.InvocationImage{{BaseImage: installer}}
 
-	project, err := compose.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), nil)
+	buildTime := cnab.Compose{Documents: buildable(documents)}
+	project, err := buildTime.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), types.Mapping{})
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("loading the compose project: %w", err)
 	}
@@ -131,6 +132,52 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	}
 	built.Images = images
 	return cnab.NewBundle(built)
+}
+
+// buildable returns the documents as the build loads them, knowing no value of the variables yet. A
+// value that needs a variable without a default is left out: whatever it will be, it is checked
+// when the bundle runs. A value whose variables all have a default is checked with them. An image
+// keeps its variables, escaped: the build resolves it as written.
+func buildable(documents []cnab.ComposeDocument) []cnab.ComposeDocument {
+	result := make([]cnab.ComposeDocument, len(documents))
+	for i, document := range documents {
+		config, _ := withoutUnknowns(document.Config, nil).(map[string]any)
+		result[i] = cnab.ComposeDocument{Name: document.Name, Config: config}
+	}
+	return result
+}
+
+// withoutUnknowns copies value without what needs an unknown variable, and returns nil when value
+// itself does.
+func withoutUnknowns(value any, path []string) any {
+	switch value := value.(type) {
+	case map[string]any:
+		copied := map[string]any{}
+		for key, element := range value {
+			if element = withoutUnknowns(element, append(slices.Clone(path), key)); element != nil {
+				copied[key] = element
+			}
+		}
+		return copied
+	case []any:
+		copied := []any{}
+		for _, element := range value {
+			if element = withoutUnknowns(element, path); element != nil {
+				copied = append(copied, element)
+			}
+		}
+		return copied
+	case string:
+		if len(path) == 3 && path[0] == "services" && path[2] == "image" {
+			return strings.ReplaceAll(value, "$", "$$")
+		}
+		for _, variable := range template.ExtractVariables(map[string]any{"value": value}, template.DefaultPattern) {
+			if variable.DefaultValue == "" {
+				return nil
+			}
+		}
+	}
+	return value
 }
 
 // readCompose reads the compose files as documents, and takes
