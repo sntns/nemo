@@ -13,6 +13,7 @@ import (
 
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/moby/moby/client"
 	"golang.org/x/sync/errgroup"
 
@@ -121,85 +122,105 @@ type service struct {
 // the containers Compose runs for each service, by their labels.
 func servicesOf(ctx context.Context, api client.APIClient, orchestrator string, filters client.Filters) ([]service, error) {
 	if orchestrator == target.Swarm {
-		listed, err := api.ServiceList(ctx, client.ServiceListOptions{Filters: filters, Status: true})
-		if err != nil {
-			return nil, fmt.Errorf("listing the services: %w", err)
-		}
-		services := make([]service, 0, len(listed.Items))
-		for _, item := range listed.Items {
-			running, desired := 0, 0
-			if status := item.ServiceStatus; status != nil {
-				running, desired = int(status.RunningTasks), int(status.DesiredTasks)
-			}
-			state := "running"
-			if running < desired {
-				state = "starting"
-			}
-			id := item.ID
-			services = append(services, service{
-				bundle: item.Spec.Labels[labels.Bundle],
-				state:  ServiceState{Name: item.Spec.Labels[labels.Service], Running: running, Desired: desired, State: state},
-				streams: func(ctx context.Context, options client.ContainerLogsOptions) ([]io.ReadCloser, error) {
-					logs, err := api.ServiceLogs(ctx, id, client.ServiceLogsOptions(options))
-					return []io.ReadCloser{logs}, err
-				},
-			})
-		}
-		return services, nil
+		return swarmServices(ctx, api, filters)
 	}
+	return composeServices(ctx, api, filters)
+}
 
+func swarmServices(ctx context.Context, api client.APIClient, filters client.Filters) ([]service, error) {
+	listed, err := api.ServiceList(ctx, client.ServiceListOptions{Filters: filters, Status: true})
+	if err != nil {
+		return nil, fmt.Errorf("listing the services: %w", err)
+	}
+	services := make([]service, 0, len(listed.Items))
+	for _, item := range listed.Items {
+		id := item.ID
+		services = append(services, service{
+			bundle: item.Spec.Labels[labels.Bundle],
+			state:  swarmState(item),
+			streams: func(ctx context.Context, options client.ContainerLogsOptions) ([]io.ReadCloser, error) {
+				logs, err := api.ServiceLogs(ctx, id, client.ServiceLogsOptions(options))
+				return []io.ReadCloser{logs}, err
+			},
+		})
+	}
+	return services, nil
+}
+
+// swarmState is a Swarm service's state: running once all its tasks run, starting until then.
+func swarmState(item swarm.Service) ServiceState {
+	state := ServiceState{Name: item.Spec.Labels[labels.Service], State: "running"}
+	if status := item.ServiceStatus; status != nil {
+		state.Running, state.Desired = int(status.RunningTasks), int(status.DesiredTasks)
+	}
+	if state.Running < state.Desired {
+		state.State = "starting"
+	}
+	return state
+}
+
+func composeServices(ctx context.Context, api client.APIClient, filters client.Filters) ([]service, error) {
 	listed, err := api.ContainerList(ctx, client.ContainerListOptions{All: true, Filters: filters})
 	if err != nil {
 		return nil, fmt.Errorf("listing the containers: %w", err)
 	}
-	byName := map[string]*service{}
-	var containers []container.Summary
+	type key struct{ bundle, service string }
+	byService := map[key][]container.Summary{}
 	for _, summary := range listed.Items {
-		key := summary.Labels[labels.Bundle] + "/" + summary.Labels[labels.Service]
-		found, ok := byName[key]
-		if !ok {
-			found = &service{bundle: summary.Labels[labels.Bundle], state: ServiceState{Name: summary.Labels[labels.Service], State: "running"}}
-			byName[key] = found
-		}
-		found.state.Desired++
-		state := string(summary.State)
-		if summary.Health != nil && summary.Health.Status != "" && summary.Health.Status != container.NoHealthcheck {
-			state = string(summary.Health.Status)
-		}
-		if summary.State == container.StateRunning {
-			found.state.Running++
-		}
-		if state != "running" && state != "healthy" {
-			found.state.State = state
-		}
-		containers = append(containers, summary)
+		of := key{summary.Labels[labels.Bundle], summary.Labels[labels.Service]}
+		byService[of] = append(byService[of], summary)
 	}
-	services := make([]service, 0, len(byName))
-	for _, key := range slices.Sorted(maps.Keys(byName)) {
-		found := byName[key]
-		var ids []string
-		for _, summary := range containers {
-			if summary.Labels[labels.Bundle]+"/"+summary.Labels[labels.Service] == key {
-				ids = append(ids, summary.ID)
-			}
-		}
-		found.streams = func(ctx context.Context, options client.ContainerLogsOptions) ([]io.ReadCloser, error) {
-			var streams []io.ReadCloser
-			for _, id := range ids {
-				logs, err := api.ContainerLogs(ctx, id, options)
-				if err != nil {
-					for _, opened := range streams {
-						opened.Close()
-					}
-					return nil, err
-				}
-				streams = append(streams, logs)
-			}
-			return streams, nil
-		}
-		services = append(services, *found)
+	keys := slices.SortedFunc(maps.Keys(byService), func(left, right key) int {
+		return cmp.Or(cmp.Compare(left.bundle, right.bundle), cmp.Compare(left.service, right.service))
+	})
+	services := make([]service, 0, len(keys))
+	for _, of := range keys {
+		containers := byService[of]
+		services = append(services, service{bundle: of.bundle, state: composeState(of.service, containers), streams: containerLogs(api, containers)})
 	}
 	return services, nil
+}
+
+// composeState is the state of a service Compose runs: running, unless one
+// of its containers is in another state, or unhealthy.
+func composeState(name string, containers []container.Summary) ServiceState {
+	state := ServiceState{Name: name, Desired: len(containers), State: "running"}
+	for _, summary := range containers {
+		if summary.State == container.StateRunning {
+			state.Running++
+		}
+		if shown := containerState(summary); shown != "running" && shown != "healthy" {
+			state.State = shown
+		}
+	}
+	return state
+}
+
+// containerState is the health of the container when it has a healthcheck, else its state.
+func containerState(summary container.Summary) string {
+	if health := summary.Health; health != nil && health.Status != "" && health.Status != container.NoHealthcheck {
+		return string(health.Status)
+	}
+	return string(summary.State)
+}
+
+// containerLogs opens the logs of each container, and closes those it
+// opened when one fails.
+func containerLogs(api client.APIClient, containers []container.Summary) func(ctx context.Context, options client.ContainerLogsOptions) ([]io.ReadCloser, error) {
+	return func(ctx context.Context, options client.ContainerLogsOptions) ([]io.ReadCloser, error) {
+		var streams []io.ReadCloser
+		for _, summary := range containers {
+			logs, err := api.ContainerLogs(ctx, summary.ID, options)
+			if err != nil {
+				for _, opened := range streams {
+					opened.Close()
+				}
+				return nil, err
+			}
+			streams = append(streams, logs)
+		}
+		return streams, nil
+	}
 }
 
 // LogsRequest follows the logs of the services of a stack.

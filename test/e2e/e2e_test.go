@@ -63,16 +63,25 @@ func build() error {
 		return err
 	}
 	tree := strings.TrimSpace(string(root))
+	// busybox is exported once, through the daemon's cache, rather than pulled by each bundle.
+	busybox := filepath.Join(work, "busybox")
+	if err := os.MkdirAll(busybox, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(busybox, "Dockerfile"), []byte("FROM busybox:1.37\n"), 0o644); err != nil {
+		return err
+	}
 	steps := [][]string{
 		{"go", "build", "-o", filepath.Join(work, "nemo"), "./cmd/nemo"},
 		{"docker", "buildx", "build", "-f", "build/gill/Dockerfile", "--provenance=false", "--output", "type=oci,dest=" + filepath.Join(work, "gill.oci") + ",tar=false", "."},
+		{"docker", "buildx", "build", "--provenance=false", "--output", "type=oci,dest=" + filepath.Join(work, "busybox.oci") + ",tar=false", busybox},
 	}
 	for _, bundle := range fixtures {
 		steps = append(steps, []string{
 			filepath.Join(work, "nemo"), "bundle", "build",
 			"-f", filepath.Join(tree, "test", "e2e", "testdata", bundle, "compose.yaml"),
 			"--version", "0.0.1",
-			"--image", "busybox:1.37=docker://busybox:1.37",
+			"--image", "busybox:1.37=oci:" + filepath.Join(work, "busybox.oci"),
 			"--installer", "oci:" + filepath.Join(work, "gill.oci"),
 			"-o", "oci:" + filepath.Join(work, "bundles", bundle+".oci"),
 		})
