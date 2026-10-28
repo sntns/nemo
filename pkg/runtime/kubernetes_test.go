@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
@@ -10,6 +11,9 @@ import (
 	"github.com/docker/cli/cli/context/docker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -60,4 +64,27 @@ func TestKubernetesDriver_objects(t *testing.T) {
 	assert.Equal(t, map[string]string{"/cnab/bundle.json": "{}", dockerTLSDirectory + "/ca.pem": "ca"}, mounted, "each file at its path")
 	assert.False(t, *job.Spec.Template.Spec.AutomountServiceAccountToken)
 	assert.Zero(t, *job.Spec.BackoffLimit, "an action is not retried")
+}
+
+func TestKubernetesDriver_follow(t *testing.T) {
+	t.Parallel()
+	pod := func(phase corev1.PodPhase, waiting string) *corev1.Pod {
+		status := corev1.ContainerStatus{Image: "ghcr.io/sntns/gill:0.1.0"}
+		if waiting != "" {
+			status.State.Waiting = &corev1.ContainerStateWaiting{Reason: waiting, Message: "not found"}
+		}
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "nemo-demo-pod", Namespace: "nemo", Labels: map[string]string{"job-name": "nemo-demo"}},
+			Status:     corev1.PodStatus{Phase: phase, ContainerStatuses: []corev1.ContainerStatus{status}},
+		}
+	}
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "nemo-demo", Namespace: "nemo"}, Status: batchv1.JobStatus{Failed: 1}}
+
+	var output bytes.Buffer
+	ran := &kubernetesDriver{namespace: "nemo", client: fake.NewClientset(pod(corev1.PodFailed, ""), job)}
+	require.EqualError(t, ran.follow(t.Context(), "nemo-demo", &output), "the installer failed")
+	assert.Equal(t, "fake logs", output.String(), "the pod's output")
+
+	unpulled := &kubernetesDriver{namespace: "nemo", client: fake.NewClientset(pod(corev1.PodPending, "ErrImagePull"), job)}
+	require.ErrorContains(t, unpulled.follow(t.Context(), "nemo-demo", &output), "the cluster can't pull the installer's image ghcr.io/sntns/gill:0.1.0: not found")
 }

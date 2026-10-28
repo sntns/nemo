@@ -64,37 +64,55 @@ func Load(ctx context.Context, api client.APIClient, images []Image, events prog
 	total := int64(len(images))
 	for done, image := range images {
 		events.Emit(progress.Event{Group: progress.Images, Item: image.Name, State: progress.Working, Current: int64(done), Total: total})
-		dgst := image.Digest
-		var fetcher remotes.Fetcher
-		var descriptor ocispec.Descriptor
-		if dgst == "" {
-			if has(ctx, api, image.Name) {
-				continue
-			}
-			if fetcher, descriptor, err = image.Source(ctx); err != nil {
-				return nil, err
-			}
-			dgst = descriptor.Digest
-		}
-		loaded, err := LoadedName(image.Name, dgst)
+		loaded, err := carry(ctx, api, image, platform)
 		if err != nil {
 			return nil, err
 		}
-		relocationMap[image.Name] = loaded
-		if has(ctx, api, loaded) {
-			continue
-		}
-		if fetcher == nil {
-			if fetcher, descriptor, err = image.Source(ctx); err != nil {
-				return nil, err
-			}
-		}
-		if err := load(ctx, api, fetcher, descriptor, platform, loaded); err != nil {
-			return nil, fmt.Errorf("loading image %s into the target's Docker: %w", image.Name, err)
+		if loaded != "" {
+			relocationMap[image.Name] = loaded
 		}
 	}
 	events.Emit(progress.Event{Group: progress.Images, State: progress.Done, Current: total, Total: total})
 	return relocationMap, nil
+}
+
+// carry loads the image unless the daemon has it, and returns its loaded
+// name: none for an image with no digest that the daemon has by name. Its
+// source is read once at most, for its digest or for its content.
+func carry(ctx context.Context, api client.APIClient, image Image, platform ocispec.Platform) (string, error) {
+	var fetcher remotes.Fetcher
+	var descriptor ocispec.Descriptor
+	read := func() (err error) {
+		if fetcher == nil {
+			fetcher, descriptor, err = image.Source(ctx)
+		}
+		return err
+	}
+
+	dgst := image.Digest
+	if dgst == "" {
+		if has(ctx, api, image.Name) {
+			return "", nil
+		}
+		if err := read(); err != nil {
+			return "", err
+		}
+		dgst = descriptor.Digest
+	}
+	loaded, err := LoadedName(image.Name, dgst)
+	if err != nil {
+		return "", err
+	}
+	if has(ctx, api, loaded) {
+		return loaded, nil
+	}
+	if err := read(); err != nil {
+		return "", err
+	}
+	if err := load(ctx, api, fetcher, descriptor, platform, loaded); err != nil {
+		return "", fmt.Errorf("loading image %s into the target's Docker: %w", image.Name, err)
+	}
+	return loaded, nil
 }
 
 func has(ctx context.Context, api client.APIClient, name string) bool {

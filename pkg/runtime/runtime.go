@@ -127,7 +127,20 @@ func Execute(ctx context.Context, request Request) (Run, error) {
 	// The installer writes its events as JSON, which the writer reads back about the installation.
 	output := progress.NewWriter(events, installation)
 	defer output.Close()
-	outputConfig := func(operation *driver.Operation) error {
+	operationResult, result, err := action.New(invocationDriver).Run(ctx, claim, request.Credentials, writingTo(output), relocating(request.Relocation, loaded))
+	run := Run{Claim: claim, Result: result, Outputs: operationResult.Outputs}
+	if err != nil {
+		return run, err
+	}
+	if operationResult.Error != nil {
+		return run, &FailedError{Action: request.Action, Installation: claim.Installation, Cause: failure(operationResult.Error)}
+	}
+	return run, nil
+}
+
+// writingTo has the installer write its output, its events as JSON, to the writer.
+func writingTo(output io.Writer) action.OperationConfigFunc {
+	return func(operation *driver.Operation) error {
 		operation.Out, operation.Err = output, output
 		if operation.Environment == nil {
 			operation.Environment = map[string]string{}
@@ -135,18 +148,23 @@ func Execute(ctx context.Context, request Request) (Run, error) {
 		operation.Environment[progress.Variable] = progress.FormatJSON
 		return nil
 	}
-	relocate := func(operation *driver.Operation) error {
-		if len(request.Relocation) == 0 {
+}
+
+// relocating runs the invocation image where the map puts it, and gives
+// the installer the map.
+func relocating(relocationMap relocation.ImageRelocationMap, loaded bool) action.OperationConfigFunc {
+	return func(operation *driver.Operation) error {
+		if len(relocationMap) == 0 {
 			return nil
 		}
-		if relocated, ok := request.Relocation[operation.Image.Image]; ok {
+		if relocated, ok := relocationMap[operation.Image.Image]; ok {
 			operation.Image.Image = relocated
 			// A loaded image has no repository digest to check; it was loaded by its digest.
 			if loaded {
 				operation.Image.Digest = ""
 			}
 		}
-		data, err := json.Marshal(request.Relocation)
+		data, err := json.Marshal(relocationMap)
 		if err != nil {
 			return err
 		}
@@ -156,15 +174,6 @@ func Execute(ctx context.Context, request Request) (Run, error) {
 		operation.Files[cnab.RelocationMapFile] = string(data)
 		return nil
 	}
-	operationResult, result, err := action.New(invocationDriver).Run(ctx, claim, request.Credentials, outputConfig, relocate)
-	run := Run{Claim: claim, Result: result, Outputs: operationResult.Outputs}
-	if err != nil {
-		return run, err
-	}
-	if operationResult.Error != nil {
-		return run, &FailedError{Action: request.Action, Installation: claim.Installation, Cause: failure(operationResult.Error)}
-	}
-	return run, nil
 }
 
 // FailedError is an action the installer ran, and that failed.

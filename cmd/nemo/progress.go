@@ -345,30 +345,34 @@ func (live *live) render() []string {
 				}
 			}
 		default:
-			doing := "starting"
-			switch {
-			case view.images.State == progress.Working:
-				doing = fmt.Sprintf("loading images %d/%d", view.images.Current, view.images.Total)
-			case len(view.services) > 0:
-				ready := 0
-				for _, task := range view.tasks {
-					if task.State == progress.Done {
-						ready++
-					}
-				}
-				state := "ready"
-				if view.action == "uninstall" {
-					state = "removed"
-				}
-				doing = fmt.Sprintf("%d/%d services %s", ready, len(view.services), state)
-			}
 			spinner := cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)])
-			frame = append(frame, spinner+" "+bold.Render(name)+"  "+action+"  "+doing+faint.Render("  "+elapsed(view).String()))
+			frame = append(frame, spinner+" "+bold.Render(name)+"  "+action+"  "+doing(view)+faint.Render("  "+elapsed(view).String()))
 			frame = append(frame, warnings(view)...)
 			frame = append(frame, live.services(view)...)
 		}
 	}
 	return frame
+}
+
+// doing is what an installation at work is at: its images, then its services.
+func doing(view *installationView) string {
+	switch {
+	case view.images.State == progress.Working:
+		return fmt.Sprintf("loading images %d/%d", view.images.Current, view.images.Total)
+	case len(view.services) > 0:
+		ready := 0
+		for _, task := range view.tasks {
+			if task.State == progress.Done {
+				ready++
+			}
+		}
+		state := "ready"
+		if view.action == "uninstall" {
+			state = "removed"
+		}
+		return fmt.Sprintf("%d/%d services %s", ready, len(view.services), state)
+	}
+	return "starting"
 }
 
 // services are the lines of the services of an installation, with their

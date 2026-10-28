@@ -194,25 +194,11 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, revision st
 	events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Working, Total: int64(spec.Replicas), Message: "creating"})
 	var ids []string
 	for number := 1; number <= spec.Replicas; number++ {
-		summary, found := byNumber[number]
+		replica, found := byNumber[number]
 		delete(byNumber, number)
-		id := summary.ID
-		switch {
-		case found && summary.Labels[labels.Hash] == spec.Hash && summary.State == container.StateRunning:
-		// A container that never started, left by a failed start, is created again: Docker Desktop publishes no port on its next start.
-		case found && summary.Labels[labels.Hash] == spec.Hash && summary.State != container.StateCreated:
-			if err = orchestrator.docker.ContainerStart(ctx, id); err != nil {
-				return nil, err
-			}
-		default:
-			if found {
-				if err = orchestrator.docker.ContainerDelete(ctx, id); err != nil {
-					return nil, err
-				}
-			}
-			if id, err = orchestrator.createContainer(ctx, revision, spec, number); err != nil {
-				return nil, err
-			}
+		id, err := orchestrator.replicate(ctx, revision, spec, number, fateOf(replica, found, spec.Hash), replica.ID)
+		if err != nil {
+			return nil, err
 		}
 		ids = append(ids, id)
 	}
@@ -222,6 +208,52 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, revision st
 		}
 	}
 	return ids, nil
+}
+
+// fate is what the container of a replica needs to run the spec.
+type fate int
+
+const (
+	// kept: it runs the spec.
+	kept fate = iota
+	// started: it is the spec's, stopped.
+	started
+	// created: the replica has none.
+	created
+	// replaced: it is another spec's, or it never started.
+	replaced
+)
+
+func fateOf(replica container.Summary, found bool, hash string) fate {
+	switch {
+	case !found:
+		return created
+	case replica.Labels[labels.Hash] != hash:
+		return replaced
+	// A container left by a failed start is created again: Docker Desktop publishes no port on its next start.
+	case replica.State == container.StateCreated:
+		return replaced
+	case replica.State == container.StateRunning:
+		return kept
+	default:
+		return started
+	}
+}
+
+// replicate makes the container of the replica run the spec, as its fate
+// says, and returns its ID.
+func (orchestrator *Orchestrator) replicate(ctx context.Context, revision string, spec *convert.ServiceSpec, number int, fate fate, id string) (string, error) {
+	switch fate {
+	case kept:
+		return id, nil
+	case started:
+		return id, orchestrator.docker.ContainerStart(ctx, id)
+	case replaced:
+		if err := orchestrator.docker.ContainerDelete(ctx, id); err != nil {
+			return "", err
+		}
+	}
+	return orchestrator.createContainer(ctx, revision, spec, number)
 }
 
 // createContainer creates the container of a replica, puts its configs and
