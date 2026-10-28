@@ -15,7 +15,7 @@ import (
 // converge waits until the service has converged and stays so for its update monitor period, the
 // way docker service update does: a task that starts then crashes is caught. It reports its
 // running and desired tasks and the state of the least advanced, when they change.
-func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since time.Time, report func(running, desired uint64, phase string)) error {
+func (orchestrator *Orchestrator) converge(ctx context.Context, id string, own ownUpdate, report func(running, desired uint64, phase string)) error {
 	var stable time.Time
 	var reported string
 	for {
@@ -23,7 +23,7 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since
 		if err != nil {
 			return err
 		}
-		done, err := convergence(service, tasks, since)
+		done, err := convergence(service, tasks, own)
 		if err != nil {
 			return orchestrator.withTaskError(ctx, id, err)
 		}
@@ -56,13 +56,25 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, since
 	}
 }
 
-// convergence tells whether a service has converged: the update started after since went through,
+// ownUpdate tells which update of a service is nemo's: none when nemo left the service as it was,
+// else any that Swarm started after the one it showed before nemo's change. Both times are the
+// manager's: the installer's own clock may not agree with it.
+type ownUpdate struct {
+	changed bool
+	after   time.Time
+}
+
+func (own ownUpdate) of(status *swarm.UpdateStatus) bool {
+	return own.changed && status != nil && status.StartedAt != nil && status.StartedAt.After(own.after)
+}
+
+// convergence tells whether a service has converged: nemo's update went through,
 // and the up-to-date tasks run, or completed for a job. A task with a healthcheck only runs once
 // healthy, so depends_on conditions on health hold too. It fails when Swarm rolled back that update,
 // or stopped restarting a failed task as its restart policy says. One Swarm paused as a task failed
 // is not: the restart policy restarts that task until it runs.
-func convergence(service swarm.Service, tasks []swarm.Task, since time.Time) (bool, error) {
-	if status := service.UpdateStatus; status != nil && status.StartedAt != nil && !status.StartedAt.Before(since) {
+func convergence(service swarm.Service, tasks []swarm.Task, own ownUpdate) (bool, error) {
+	if status := service.UpdateStatus; own.of(status) {
 		switch status.State {
 		case swarm.UpdateStateUpdating:
 			return false, nil

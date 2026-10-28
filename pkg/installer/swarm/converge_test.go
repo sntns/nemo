@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/api/types/swarm"
+	"github.com/stretchr/testify/assert"
 )
 
 func task(state, desired swarm.TaskState) swarm.Task {
@@ -24,8 +25,9 @@ func replicated(running, desired uint64) swarm.Service {
 }
 
 func TestConvergence(t *testing.T) {
-	since := time.Now()
-	later, earlier := since.Add(time.Second), since.Add(-time.Hour)
+	before := time.Now()
+	later, earlier := before.Add(time.Second), before.Add(-time.Hour)
+	own := ownUpdate{changed: true, after: before}
 	running := task(swarm.TaskStateRunning, swarm.TaskStateRunning)
 	starting := task(swarm.TaskStateStarting, swarm.TaskStateRunning)
 	complete := task(swarm.TaskStateComplete, swarm.TaskStateComplete)
@@ -134,12 +136,29 @@ func TestConvergence(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			done, err := convergence(testCase.service, testCase.tasks, since)
+			done, err := convergence(testCase.service, testCase.tasks, own)
 			if done != testCase.done || (err == nil) != (testCase.err == "") || (err != nil && !strings.Contains(err.Error(), testCase.err)) {
 				t.Errorf("got %v, %v; want %v, %q", done, err, testCase.done, testCase.err)
 			}
 		})
 	}
+}
+
+// nemo's update is any Swarm started after the one it showed before nemo's change, on the
+// manager's clock: the installer's clock, here an hour ahead, does not count.
+func TestOwnUpdate(t *testing.T) {
+	previous := time.Now().Add(-2 * time.Hour)
+	next := previous.Add(time.Minute)
+	status := func(startedAt time.Time) *swarm.UpdateStatus {
+		return &swarm.UpdateStatus{State: swarm.UpdateStateRollbackCompleted, StartedAt: &startedAt}
+	}
+
+	updated := ownUpdate{changed: true, after: previous}
+	assert.True(t, updated.of(status(next)), "the rollback of nemo's update")
+	assert.False(t, updated.of(status(previous)), "the rollback of the update before")
+	assert.False(t, updated.of(nil), "no update yet")
+	assert.True(t, ownUpdate{changed: true}.of(status(next)), "a service that had no update before")
+	assert.False(t, ownUpdate{}.of(status(next)), "a service nemo left as it was")
 }
 
 func TestTasksOf(t *testing.T) {
