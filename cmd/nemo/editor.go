@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/cnabio/cnab-go/secrets/host"
 	"github.com/cnabio/cnab-go/valuesource"
+	"github.com/docker/cli/opts"
 
 	"github.com/sntns/nemo/pkg/bundle"
 	"github.com/sntns/nemo/pkg/cnab"
@@ -67,6 +68,9 @@ const (
 	screenNames
 	screenLayouts
 	screenVersion
+	screenDocker
+	screenHost
+	screenContext
 	screenOrchestrator
 	screenImages
 	screenParameter
@@ -85,6 +89,16 @@ type screen struct {
 // write: it keeps it as it is.
 const keepRemote = "remote"
 
+// How nemo reaches the target's Docker: as the environment says, at an
+// address, or through a docker context.
+const (
+	dockerEnvironment = "environment"
+	dockerHost        = "host"
+	dockerContext     = "context"
+)
+
+var dockerKinds = []string{dockerEnvironment, dockerHost, dockerContext}
+
 // editor is the interactive editor of a stack: one screen at a time, grouped
 // in steps, then a review of the whole stack that saves it.
 type editor struct {
@@ -96,6 +110,7 @@ type editor struct {
 	askName bool
 
 	from      string
+	docker    string
 	namespace string
 	directory string
 	names     string
@@ -147,6 +162,14 @@ func newEditor(ctx context.Context, edited stack.Stack, mode editMode, taken fun
 		e.directory = strings.TrimSuffix(strings.TrimPrefix(remote, "oci:"), "/{{ .Component }}.oci")
 	default:
 		e.from = keepRemote
+	}
+	switch {
+	case edited.Target.Host != "":
+		e.docker = dockerHost
+	case edited.Target.Context != "":
+		e.docker = dockerContext
+	default:
+		e.docker = dockerEnvironment
 	}
 	var names []string
 	for _, installation := range edited.Installations {
@@ -204,6 +227,13 @@ func (e *editor) screens() []screen {
 		screens = append(screens, screen{kind: screenDirectory, step: stepBundles}, screen{kind: screenLayouts, step: stepBundles})
 	default:
 		screens = append(screens, screen{kind: screenNames, step: stepBundles}, screen{kind: screenVersion, step: stepBundles})
+	}
+	screens = append(screens, screen{kind: screenDocker, step: stepTarget})
+	switch e.docker {
+	case dockerHost:
+		screens = append(screens, screen{kind: screenHost, step: stepTarget})
+	case dockerContext:
+		screens = append(screens, screen{kind: screenContext, step: stepTarget})
 	}
 	screens = append(screens, screen{kind: screenOrchestrator, step: stepTarget}, screen{kind: screenImages, step: stepTarget})
 	for _, name := range e.parameterNames() {
@@ -324,6 +354,12 @@ func (e *editor) problems(s step) []string {
 			problems = append(problems, "the bundles are not read yet")
 		}
 	case stepTarget:
+		switch {
+		case e.docker == dockerHost && e.stack.Target.Host == "":
+			problems = append(problems, "the address of the Docker is not given")
+		case e.docker == dockerContext && e.stack.Target.Context == "":
+			problems = append(problems, "the docker context is not given")
+		}
 		if !slices.Contains([]string{target.Swarm, target.Compose}, e.stack.Target.Orchestrator) {
 			problems = append(problems, "no orchestrator")
 		}
@@ -395,6 +431,12 @@ func (e *editor) enter() {
 		value, e.input.Placeholder = e.names, "web database"
 	case screenVersion:
 		value, e.cursor = e.version, max(0, slices.Index(e.versions, e.version))
+	case screenDocker:
+		e.cursor = max(0, slices.Index(dockerKinds, e.docker))
+	case screenHost:
+		value, e.input.Placeholder = e.stack.Target.Host, "ssh://deploy@vm1"
+	case screenContext:
+		value, e.input.Placeholder = e.stack.Target.Context, "production"
 	case screenOrchestrator:
 		e.cursor = max(0, slices.Index([]string{target.Swarm, target.Compose}, e.stack.Target.Orchestrator))
 	case screenImages:
@@ -583,7 +625,7 @@ func (e *editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // even with its source chosen.
 func (e *editor) paste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	switch screen := e.screen(); screen.kind {
-	case screenSource, screenOrchestrator, screenImages, screenLayouts, screenReview:
+	case screenSource, screenDocker, screenOrchestrator, screenImages, screenLayouts, screenReview:
 		return e, nil
 	case screenVersion:
 		if len(e.versions) > 0 {
@@ -621,7 +663,7 @@ func (e *editor) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	screen := e.screen()
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages:
+	case screenSource, screenDocker, screenOrchestrator, screenImages:
 		return e.choose(key, len(e.options(screen)))
 	case screenVersion:
 		if len(e.versions) > 0 {
@@ -784,6 +826,25 @@ func (e *editor) accept(value string) (tea.Cmd, error) {
 		return nil, e.setLayouts()
 	case screenVersion:
 		return e.acceptVersion(value)
+	case screenDocker:
+		e.docker = dockerKinds[e.cursor]
+		if e.docker == dockerEnvironment {
+			e.stack.Target.Host, e.stack.Target.Context = "", ""
+		}
+	case screenHost:
+		if value == "" {
+			return nil, errors.New("required")
+		}
+		host, err := opts.ParseHost(false, value)
+		if err != nil {
+			return nil, errors.New("unix://, tcp:// or ssh://user@host")
+		}
+		e.stack.Target.Host, e.stack.Target.Context = host, ""
+	case screenContext:
+		if value == "" {
+			return nil, errors.New("required")
+		}
+		e.stack.Target.Host, e.stack.Target.Context = "", value
 	case screenOrchestrator:
 		e.stack.Target.Orchestrator = []string{target.Swarm, target.Compose}[e.cursor]
 	case screenImages:
@@ -948,6 +1009,12 @@ func (e *editor) options(screen screen) []option {
 			options = append(options, option{"The manifest's remote", e.stack.Remote})
 		}
 		return options
+	case screenDocker:
+		return []option{
+			{"The environment's", "DOCKER_HOST, the current context, or the socket"},
+			{"An address", "unix://, tcp:// or ssh://user@host"},
+			{"A docker context", "one of docker context ls"},
+		}
 	case screenOrchestrator:
 		return []option{{target.Swarm, "services on a swarm, created if there is none"}, {target.Compose, "containers, as docker compose runs them"}}
 	case screenImages:
@@ -1005,7 +1072,7 @@ func (e *editor) reviewLines() []reviewLine {
 	lines = append(lines, opening(reviewLine{
 		label: "Target", value: cmp.Or(e.stack.Target.Orchestrator, "no orchestrator") + " · images " + cmp.Or(e.stack.Target.Images, target.ImagesRegistry) + " · " + docker,
 		problem: len(e.problems(stepTarget)) > 0,
-	}, screenOrchestrator, ""))
+	}, screenDocker, ""))
 	for _, volumeType := range slices.Sorted(maps.Keys(e.stack.Target.Volumes)) {
 		lines = append(lines, reviewLine{label: "volume " + volumeType, value: cmp.Or(e.stack.Target.Volumes[volumeType].Driver, "local"), indent: true})
 	}
@@ -1126,6 +1193,12 @@ func (e *editor) heading(screen screen) (string, string) {
 		return "Bundles to install", "those the directory holds"
 	case screenVersion:
 		return "Version of the bundles", strings.Join(installationNames(e.stack.Installations), " ")
+	case screenDocker:
+		return "Which Docker is the target?", "everything nemo deploys goes through it"
+	case screenHost:
+		return "Address of the target's Docker", "unix://, tcp:// or ssh://user@host"
+	case screenContext:
+		return "Docker context of the target", "a context of docker context ls"
 	case screenOrchestrator:
 		return "Orchestrator", ""
 	case screenImages:
@@ -1165,7 +1238,7 @@ func (e *editor) body(screen screen) string {
 		return " " + e.spin.View() + " " + loading
 	}
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages:
+	case screenSource, screenDocker, screenOrchestrator, screenImages:
 		var lines []string
 		for i, option := range e.options(screen) {
 			lines = append(lines, e.optionLine(i, fmt.Sprintf("%-28s", option.label)+faint.Render(option.help)))
@@ -1267,7 +1340,7 @@ func (e *editor) help(screen screen) string {
 	}
 	back := " · shift+tab back · esc quit"
 	switch screen.kind {
-	case screenSource, screenOrchestrator, screenImages, screenVersion:
+	case screenSource, screenDocker, screenOrchestrator, screenImages, screenVersion:
 		if screen.kind == screenVersion && len(e.versions) == 0 {
 			break
 		}
