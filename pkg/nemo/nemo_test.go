@@ -3,6 +3,7 @@ package nemo
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,8 @@ type fakeRuntime struct {
 	requests []runtime.Request
 	// failing names the bundles whose actions fail, as the installer's would.
 	failing map[string]bool
+	// outputs are those of every action.
+	outputs map[string]string
 }
 
 func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (runtime.Run, error) {
@@ -55,7 +58,7 @@ func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (
 		return runtime.Run{Claim: created, Result: result}, &runtime.FailedError{Action: request.Action, Installation: created.Installation, Cause: "the installer exited with code 1"}
 	}
 	result, err := created.NewResult(cnab.StatusSucceeded)
-	return runtime.Run{Claim: created, Result: result}, err
+	return runtime.Run{Claim: created, Result: result, Outputs: maps.Clone(fake.outputs)}, err
 }
 
 func (fake *fakeRuntime) last() runtime.Request { return fake.requests[len(fake.requests)-1] }
@@ -285,6 +288,60 @@ func TestAValueIsNotRecorded(t *testing.T) {
 	require.NoError(t, err, "given again")
 	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
 	assert.NoError(t, err, "token applies to install and upgrade only")
+}
+
+// writeSourcedBundle writes a bundle that reads its state from the output
+// of its last run.
+func writeSourcedBundle(t *testing.T, directory string) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"schemaVersion":      "1.2.0",
+		"name":               "stateful",
+		"version":            "0.1.0",
+		"invocationImages":   []any{map[string]any{"imageType": "docker", "image": "registry.example.com/stateful:0.1.0"}},
+		"requiredExtensions": []any{"io.cnab.parameter-sources"},
+		"custom": map[string]any{
+			"io.cnab.parameter-sources": map[string]any{
+				"state": map[string]any{"priority": []any{"output"}, "sources": map[string]any{"output": map[string]any{"name": "state"}}},
+			},
+		},
+		"definitions": map[string]any{"string": map[string]any{"type": "string"}},
+		"parameters":  map[string]any{"state": map[string]any{"definition": "string", "destination": map[string]any{"path": "/cnab/app/state"}}},
+		"outputs":     map[string]any{"state": map[string]any{"definition": "string", "path": "/cnab/app/outputs/state"}},
+	})
+	require.NoError(t, err)
+	path := filepath.Join(directory, "stateful.json")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
+// A parameter the bundle reads from an output gets the output of the
+// installation's last run that has it, and is never recorded with the
+// installation's parameters.
+func TestSourcedParameters(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	stateful := storage.InstallationSpec{Name: "stateful", Stack: "demo"}
+
+	fake.outputs = map[string]string{"state": "run 1"}
+	_, err := nemo.Install(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Stack: "demo"}, BundleSource: writeSourcedBundle(t, filepath.Dir(bundleFile)), Target: target.Target{Orchestrator: target.Compose}})
+	require.NoError(t, err)
+	assert.NotContains(t, fake.last().Parameters, "state", "no run before, no state")
+
+	fake.outputs = map[string]string{"state": "run 2"}
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: stateful})
+	require.NoError(t, err)
+	assert.Equal(t, "run 1", fake.last().Parameters["state"], "the install's output")
+
+	fake.outputs = nil
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: stateful})
+	require.NoError(t, err)
+	assert.Equal(t, "run 2", fake.last().Parameters["state"], "the latest")
+
+	installation, err := nemo.Installation(ctx, "demo", "stateful")
+	require.NoError(t, err)
+	assert.NotContains(t, installation.Parameters, "state", "read again at each action")
 }
 
 func TestInstallationStatus(t *testing.T) {

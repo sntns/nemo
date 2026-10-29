@@ -26,9 +26,10 @@ type ExtendedBundle struct {
 	bundle.Bundle
 
 	// Each extension is nil when the bundle does not carry it.
-	Docker       *Docker
-	Dependencies *Dependencies
-	Compose      *Compose
+	Docker           *Docker
+	Dependencies     *Dependencies
+	Compose          *Compose
+	ParameterSources *ParameterSources
 }
 
 // NewBundle validates a bundle and decodes its extensions.
@@ -42,6 +43,7 @@ func NewBundle(bundle bundle.Bundle) (ExtendedBundle, error) {
 		read(DockerExtension, bundle, &extendedBundle.Docker),
 		read(DependenciesExtension, bundle, &extendedBundle.Dependencies),
 		read(ComposeExtension, bundle, &extendedBundle.Compose),
+		read(ParameterSourcesExtension, bundle, &extendedBundle.ParameterSources),
 	); err != nil {
 		return ExtendedBundle{}, fmt.Errorf("invalid bundle: %w", err)
 	}
