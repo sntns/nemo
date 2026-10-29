@@ -213,7 +213,8 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 	}
 
 	run = redact(plan.bundle, run)
-	if saveErr := nemo.save(ctx, plan, run); saveErr != nil {
+	// Recorded even when ctx ends: a target's records are written through its Docker.
+	if saveErr := nemo.save(context.WithoutCancel(ctx), plan, run); saveErr != nil {
 		err = errors.Join(err, fmt.Errorf("the action ran, but could not be recorded: %w", saveErr))
 	}
 	return Run{

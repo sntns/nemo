@@ -129,6 +129,45 @@ func TestInstallThenUninstallWithNothingElse(t *testing.T) {
 	assert.Empty(t, request.Credentials, "token does not apply to uninstall")
 }
 
+// cancelling refuses a context that ended, as the store of a target does:
+// it writes through Docker.
+type cancelling struct{ storage.Store }
+
+func (store cancelling) SaveRun(ctx context.Context, stack, name string, run cnab.Claim) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return store.Store.SaveRun(ctx, stack, name, run)
+}
+
+// An action whose context ends while it runs, at Terraform's timeout or at
+// ^C, is recorded all the same: it failed.
+func TestAnActionCutShortIsRecorded(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, token := setup(t)
+	nemo.store = cancelling{nemo.store}
+	fake.failing = map[string]bool{"nginx": true}
+	ctx, cancel := context.WithCancel(context.Background())
+	nemo.execute = func(ctx context.Context, request runtime.Request) (runtime.Run, error) {
+		cancel()
+		return fake.execute(ctx, request)
+	}
+
+	_, err := nemo.Install(ctx, ActionRequest{
+		InstallationSpec: storage.InstallationSpec{
+			Stack:       "demo",
+			Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}},
+		},
+		BundleSource: bundleFile,
+		Target:       target.Target{Orchestrator: target.Swarm},
+	})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "could not be recorded")
+	installation, err := nemo.Installation(context.Background(), "demo", "nginx")
+	require.NoError(t, err)
+	assert.Equal(t, cnab.StatusFailed, installation.Status.ResultStatus)
+}
+
 func TestUpgradeOverridesParameters(t *testing.T) {
 	t.Parallel()
 	nemo, fake, bundleFile, token := setup(t)
