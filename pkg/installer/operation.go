@@ -121,6 +121,11 @@ func (container Container) readParameters(bundle cnab.ExtendedBundle, action str
 		}
 
 		raw, delivered, err := container.deliver(parameter.Destination)
+		// Porter delivers a parameter it was not given empty: of a type
+		// that has no empty value, it is not given.
+		if delivered && raw == "" && definition.Type != "string" {
+			delivered = false
+		}
 		switch {
 		case err != nil:
 			errs = append(errs, fmt.Errorf("parameter %s: %w", name, err))

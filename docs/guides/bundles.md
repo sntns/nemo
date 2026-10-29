@@ -193,6 +193,21 @@ export NEMO_INSTALLER=docker://registry.example.com/mirror/gill:0.1.0
 
 When the bundle is pushed (`-o oci:` or `-o docker://`), gill's image is pushed with it, so the bundle runs without access to ghcr.io.
 
+## With another CNAB tool
+
+A bundle nemo builds is a CNAB bundle: another CNAB runtime installs it, with the parameters it declares. With [Porter](https://porter.sh):
+
+```bash
+porter install shop-web --reference registry.example.com/shop/web:1.4.0 \
+  --param nemo-orchestrator=compose --allow-docker-host-access
+```
+
+- `nemo-orchestrator` is required: `compose` or `swarm`, as nemo's target says it.
+- `--allow-docker-host-access`: gill deploys on the Docker that runs it, which the bundle declares with the `io.cnab.docker` extension.
+- Porter keeps the value of a sensitive parameter in a secrets plugin, and `nemo-registry-auth` is one: give Porter a plugin that stores them, `PORTER_DEFAULT_SECRETS_PLUGIN=filesystem` on a developer's machine.
+
+`porter upgrade`, `porter invoke --action validate` and `porter uninstall` work as nemo's actions do. What nemo adds on top of CNAB stays with nemo: stacks, records on the target, status and logs.
+
 ## Reference
 
 The complete list of what `x-nemo-bundle` and `x-nemo-volume` accept, and what a built bundle contains, is in the [bundle format reference](../reference/bundle-format.md).

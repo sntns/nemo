@@ -102,6 +102,28 @@ func TestReadOperation(t *testing.T) {
 	assert.Equal(t, "registry.local/nginx:1.27", operation.Relocation["nginx:1.27"])
 }
 
+// A runtime that delivers a parameter it was not given, as Porter does, delivers
+// it empty: of a type that has no empty value, it is not given; a string is
+// given empty.
+func TestReadOperation_emptyParameters(t *testing.T) {
+	t.Parallel()
+	cnabBundle := testBundle(func(cnabBundle *bundle.Bundle) {
+		cnabBundle.Definitions = definition.Definitions{
+			"volumes": &definition.Schema{Type: "object"},
+			"purge":   &definition.Schema{Type: "boolean", Default: false},
+			"auth":    &definition.Schema{Type: "string"},
+		}
+		cnabBundle.Parameters = map[string]bundle.Parameter{
+			"nemo-volumes": {Definition: "volumes", Destination: &bundle.Location{EnvironmentVariable: "NEMO_VOLUMES"}},
+			"nemo-purge":   {Definition: "purge", Destination: &bundle.Location{EnvironmentVariable: "NEMO_PURGE"}},
+			"auth":         {Definition: "auth", Destination: &bundle.Location{EnvironmentVariable: "AUTH"}},
+		}
+	})
+	operation, err := ReadOperation(container(t, cnabBundle, map[string]string{"NEMO_VOLUMES": "", "NEMO_PURGE": "", "AUTH": ""}, nil))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]any{"nemo-purge": false, "auth": ""}, operation.Parameters)
+}
+
 func TestReadOperation_errors(t *testing.T) {
 	t.Parallel()
 
