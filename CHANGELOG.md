@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/sntns/nemo/compare/v0.6.0...v0.7.0) (2026-10-29)
+
+
+### Features
+
+* honour io.cnab.parameter-sources ([d4e7a3f](https://github.com/sntns/nemo/commit/d4e7a3f4e23f0857db6bdb1814b35205a07414c1))
+
+
+### Bug Fixes
+
+* **gill:** take an empty parameter of a type with no empty value as not given ([d50e5fa](https://github.com/sntns/nemo/commit/d50e5faf32053828ea335a0ce535c5ba13a2e3cd))
+
 ## [0.6.0](https://github.com/sntns/nemo/compare/v0.5.1...v0.6.0) (2026-10-29)
 
 
