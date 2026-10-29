@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/sntns/nemo/compare/v0.5.0...v0.5.1) (2026-10-29)
+
+
+### Bug Fixes
+
+* record an action whose context ends while it runs ([f1222e5](https://github.com/sntns/nemo/commit/f1222e537c337432629b827ca8a161f2a0a84ab7))
+
 ## [0.5.0](https://github.com/sntns/nemo/compare/v0.4.0...v0.5.0) (2026-10-29)
 
 
