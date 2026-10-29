@@ -110,7 +110,7 @@ A CNAB credential set: a list of credentials, each given to every installation w
 | `source.path` | Read the value from this file. `$VARIABLES` are expanded. |
 | `source.env` | Read the value from this environment variable of nemo's. |
 | `source.command` | Read the value from the output of this command, run without a shell. |
-| `source.value` | This value, as written. |
+| `source.value` | This value, as written. The records keep the source without it. |
 
 Exactly one source per credential.
 

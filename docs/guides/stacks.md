@@ -82,6 +82,8 @@ Credentials are given by their **source**, never by their value. nemo reads the 
 | `command` | The output of a command. It runs without a shell: write a script for pipes. | `{ command: "pass show shop/tls-key" }` |
 | `value` | The value itself, written in the manifest. For values that are not secret. | `{ value: "public-key-id" }` |
 
+The records keep a `value` source without its value, as they keep the others without theirs: `nemo up` gives it from the manifest at each install and upgrade, and an action outside the manifest, such as `nemo installation upgrade web`, is given it again with `--credential`, or stops and says so. `nemo down` needs none: the bundles nemo builds read their credentials to install and upgrade only. The runs recorded before nemo 0.6 keep the values they were given.
+
 As with parameters, the stack's `credentials` go to every installation whose bundle declares them, and an installation's own override them. A credential the bundle requires but the stack does not give stops the action before it starts.
 
 On the command line, a credential is `NAME=SOURCE:VALUE`:

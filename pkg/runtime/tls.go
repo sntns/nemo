@@ -10,6 +10,7 @@ import (
 	"github.com/cnabio/cnab-go/secrets/host"
 	"github.com/cnabio/cnab-go/valuesource"
 
+	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/target"
 )
 
@@ -26,6 +27,9 @@ func readTLS(given target.TLS) (tlsPEM, error) {
 	}{{"CA", given.CA, &read.ca}, {"certificate", given.Cert, &read.cert}, {"key", given.Key, &read.key}} {
 		if part.source == nil {
 			continue
+		}
+		if credentials.IsUnrecorded(*part.source) {
+			return read, fmt.Errorf("the target's TLS: its %s was given by value, which nemo does not record: give it again, in the manifest", part.name)
 		}
 		value, err := (&host.SecretStore{}).Resolve(part.source.Key, part.source.Value)
 		if err != nil {
