@@ -41,6 +41,8 @@ nemo never guesses the orchestrator from the Docker it finds: a Docker that is a
 
 The target's address is the only one nemo needs: it runs gill there, and reads the status and logs from there. For a swarm, give the address of a manager.
 
+A program built on nemo's library, such as its Terraform provider, can also hand nemo the TLS of a `tcp://` address, in PEM (`nemo.Options.TLS`): nemo builds its Docker client with it, in memory, and writes it nowhere, neither in a manifest nor in the records of the installations.
+
 ## How images arrive
 
 | `images` | The target | Use it when |

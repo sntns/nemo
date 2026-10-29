@@ -1,6 +1,7 @@
 package target
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,4 +34,16 @@ func TestInstaller_Validate(t *testing.T) {
 	assert.EqualError(t, Installer{Driver: DriverKubernetes, Kubernetes: &Kubernetes{}}.Validate(), "kubernetes: (namespace: cannot be blank.).")
 	assert.EqualError(t, Installer{Kubernetes: &Kubernetes{Namespace: "nemo"}}.Validate(), "kubernetes: only the kubernetes driver takes them.")
 	assert.EqualError(t, Installer{Driver: "podman"}.Validate(), "driver: must be docker or kubernetes.")
+}
+
+func TestConfiguration_tls(t *testing.T) {
+	t.Parallel()
+	held := &TLS{CA: "ca", Cert: "cert", Key: "key"}
+	assert.NoError(t, Configuration{Host: "tcp://vm1:2376", TLS: held}.Validate())
+	assert.ErrorContains(t, Configuration{Host: "ssh://deploy@vm1", TLS: held}.Validate(), "TLS is for a tcp:// host")
+	assert.ErrorContains(t, Configuration{Host: "tcp://vm1:2376", TLS: &TLS{Cert: "cert"}}.Validate(), "give the client's key with its certificate")
+
+	data, err := json.Marshal(Target{Orchestrator: Swarm, Configuration: Configuration{Host: "tcp://vm1:2376", TLS: held}})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "key", "never written")
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/sntns/nemo/pkg/stack"
 	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/storage/volume"
+	"github.com/sntns/nemo/pkg/target"
 )
 
 // ManagedError is a write refused on a stack another tool manages.
@@ -70,7 +71,7 @@ func (nemo *Nemo) open(ctx context.Context, manifest *stack.Stack, name string, 
 		return nothing, nil
 	}
 
-	api, err := runtime.Connect(manifest.Target)
+	api, err := runtime.Connect(nemo.reach(manifest.Target))
 	if err != nil {
 		return nil, err
 	}
@@ -116,6 +117,14 @@ func (nemo *Nemo) close(ctx context.Context, name string) error {
 	delete(nemo.opened, name)
 	nemo.mutex.Unlock()
 	return opened.store.Close(ctx)
+}
+
+// reach gives the target the TLS nemo holds for its address.
+func (nemo *Nemo) reach(deployment target.Target) target.Target {
+	if tls, ok := nemo.tls[deployment.Host]; ok {
+		deployment.TLS = &tls
+	}
+	return deployment
 }
 
 // release closes what open opened, and keeps its error when there is none.

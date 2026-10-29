@@ -4,8 +4,12 @@
 package target
 
 import (
+	"regexp"
+
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 )
+
+var tcpHost = regexp.MustCompile(`^tcp://`)
 
 // Orchestrators of a target.
 const (
@@ -57,6 +61,27 @@ type Configuration struct {
 	// Images says how the images reach the target: registry, the default,
 	// or load.
 	Images string `json:"images,omitempty"`
+	// TLS is how nemo reaches a tcp:// Host that checks its clients, when
+	// neither a docker context nor the environment says it. It is held in
+	// memory: no manifest, claim or record keeps it.
+	TLS *TLS `json:"-"`
+}
+
+// TLS is the TLS of a Docker's address, in PEM: the CA that signed the
+// daemon's certificate, else the system's, and the client's certificate
+// and key.
+type TLS struct {
+	CA   string
+	Cert string
+	Key  string
+}
+
+// Validate checks that the certificate and the key are given together.
+func (tls TLS) Validate() error {
+	return validation.ValidateStruct(&tls,
+		validation.Field(&tls.Cert, validation.When(tls.Key != "", validation.Required.Error("give the client's certificate with its key"))),
+		validation.Field(&tls.Key, validation.When(tls.Cert != "", validation.Required.Error("give the client's key with its certificate"))),
+	)
 }
 
 // VolumeDriver is a volume driver and its options.
@@ -95,7 +120,9 @@ func (target Target) Validate() error {
 // Validate checks the configuration, and each of its volume types.
 func (configuration Configuration) Validate() error {
 	return validation.ValidateStruct(&configuration,
-		validation.Field(&configuration.Host, validation.When(configuration.Context != "", validation.Empty.Error("give a host or a docker context, not both"))),
+		validation.Field(&configuration.Host, validation.When(configuration.Context != "", validation.Empty.Error("give a host or a docker context, not both")),
+			validation.When(configuration.TLS != nil, validation.Match(tcpHost).Error("TLS is for a tcp:// host"))),
+		validation.Field(&configuration.TLS),
 		validation.Field(&configuration.Volumes),
 		validation.Field(&configuration.Images, validation.In(ImagesRegistry, ImagesLoad).Error("must be registry or load")),
 	)

@@ -37,6 +37,10 @@ type Options struct {
 	Owner string
 	// Force writes a stack another tool manages anyway.
 	Force bool
+	// TLS is the TLS of the Dockers nemo reaches, by their tcp:// address,
+	// when neither a docker context nor the environment says it. It is
+	// held in memory, and never recorded.
+	TLS map[string]target.TLS
 }
 
 // Nemo is the entry point of the API.
@@ -47,6 +51,7 @@ type Nemo struct {
 	manifests *stack.Store
 	owner     string
 	force     bool
+	tls       map[string]target.TLS
 	mutex     sync.Mutex
 	opened    map[string]*session
 
@@ -67,7 +72,7 @@ func New(opts Options) (*Nemo, error) {
 		}
 	}
 	return &Nemo{
-		store: file.New(home), manifests: stack.NewStore(home), owner: opts.Owner, force: opts.Force,
+		store: file.New(home), manifests: stack.NewStore(home), owner: opts.Owner, force: opts.Force, tls: opts.TLS,
 		execute: runtime.Execute, load: LoadBundle, tags: bundle.RegistryTags{},
 	}, nil
 }
@@ -199,7 +204,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Bundle:      plan.bundle,
 		Stack:       request.Stack,
 		Action:      action,
-		Target:      plan.target,
+		Target:      nemo.reach(plan.target),
 		Installer:   plan.installer,
 		Parameters:  plan.parameters,
 		Credentials: values,

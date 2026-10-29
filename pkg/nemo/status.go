@@ -111,7 +111,7 @@ func (nemo *Nemo) stackOf(ctx context.Context, stack string) (_ []storage.Instal
 			deployment = installation.Target
 		}
 	}
-	return installations, deployment, nil
+	return installations, nemo.reach(deployment), nil
 }
 
 // service is a service of the target, with the installation it belongs to
