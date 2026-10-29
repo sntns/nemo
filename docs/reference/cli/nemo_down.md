@@ -18,6 +18,7 @@ nemo down [flags]
 
 ```
   -f, --file string    a stack's manifest
+      --force          write a stack another tool manages, Terraform: its next run undoes it
   -h, --help           help for down
       --json           print the record of the runs as JSON on stdout
       --purge          also remove the volumes

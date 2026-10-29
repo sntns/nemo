@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/cnabio/cnab-go/valuesource"
@@ -20,6 +21,7 @@ import (
 	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/progress"
 	"github.com/sntns/nemo/pkg/runtime"
+	"github.com/sntns/nemo/pkg/stack"
 	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/storage/file"
 	"github.com/sntns/nemo/pkg/target"
@@ -29,11 +31,25 @@ import (
 type Options struct {
 	// Home is where nemo keeps its files. Empty, it is $NEMO_HOME, or ~/.nemo.
 	Home string
+	// Owner is the tool nemo acts for, terraform for its provider: it
+	// manages the stacks whose records it writes on their target, and
+	// another nemo refuses to write them.
+	Owner string
+	// Force writes a stack another tool manages anyway.
+	Force bool
 }
 
 // Nemo is the entry point of the API.
 type Nemo struct {
-	store   storage.Store
+	// store keeps the records of the stacks that keep them at home; the
+	// others are on their target, opened for the time of an operation.
+	store     storage.Store
+	manifests *stack.Store
+	owner     string
+	force     bool
+	mutex     sync.Mutex
+	opened    map[string]*session
+
 	execute func(context.Context, runtime.Request) (runtime.Run, error)
 	// load reads a bundle from its source.
 	load func(context.Context, string) (cnab.BundleReference, error)
@@ -50,7 +66,10 @@ func New(opts Options) (*Nemo, error) {
 			return nil, err
 		}
 	}
-	return &Nemo{store: file.New(home), execute: runtime.Execute, load: LoadBundle, tags: bundle.RegistryTags{}}, nil
+	return &Nemo{
+		store: file.New(home), manifests: stack.NewStore(home), owner: opts.Owner, force: opts.Force,
+		execute: runtime.Execute, load: LoadBundle, tags: bundle.RegistryTags{},
+	}, nil
 }
 
 // ActionRequest is an action on one installation of a bundle. What it
@@ -125,7 +144,12 @@ func (nemo *Nemo) Uninstall(ctx context.Context, request ActionRequest) (Run, er
 // it is given loaded. When it ran and failed, both the Run and the error
 // are returned. Every action that ran is recorded, and so is the
 // installation's new state.
-func (nemo *Nemo) act(ctx context.Context, action string, request ActionRequest, loaded *cnab.BundleReference) (Run, error) {
+func (nemo *Nemo) act(ctx context.Context, action string, request ActionRequest, loaded *cnab.BundleReference) (_ Run, err error) {
+	closeRecords, err := nemo.open(ctx, nil, request.Stack, true)
+	if err != nil {
+		return Run{}, err
+	}
+	defer release(closeRecords, &err)
 	plan, err := nemo.plan(ctx, action, request, loaded)
 	if err != nil {
 		return Run{}, err
@@ -240,7 +264,7 @@ func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest
 		return plan, errors.New("give the stack, and the bundle's name or its file")
 	}
 
-	stored, err := nemo.store.GetInstallation(ctx, request.Stack, name)
+	stored, err := nemo.records(request.Stack).GetInstallation(ctx, request.Stack, name)
 	known := err == nil
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return plan, err
@@ -318,7 +342,7 @@ func (plan *actionPlan) goOnFrom(stored storage.Installation, request ActionRequ
 // bundleOf returns the bundle the installation's last action ran, from its
 // claim, where Porter keeps it too.
 func (nemo *Nemo) bundleOf(ctx context.Context, installation storage.Installation) (cnab.ExtendedBundle, error) {
-	run, err := nemo.store.GetRun(ctx, installation.Stack, installation.Name, installation.Status.RunID)
+	run, err := nemo.records(installation.Stack).GetRun(ctx, installation.Stack, installation.Name, installation.Status.RunID)
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("the bundle of %s: %w", installation.ID(), err)
 	}
@@ -425,14 +449,15 @@ func redact(bundle cnab.ExtendedBundle, run runtime.Run) runtime.Run {
 // credentials are kept by source only.
 func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) error {
 	bundle, claim, result := plan.bundle, run.Claim, run.Result
-	if err := nemo.store.SaveRun(ctx, plan.stack, bundle.Name, claim); err != nil {
+	records := nemo.records(plan.stack)
+	if err := records.SaveRun(ctx, plan.stack, bundle.Name, claim); err != nil {
 		return err
 	}
-	if err := nemo.store.SaveResult(ctx, plan.stack, bundle.Name, result, run.Outputs); err != nil {
+	if err := records.SaveResult(ctx, plan.stack, bundle.Name, result, run.Outputs); err != nil {
 		return err
 	}
 
-	stored, err := nemo.store.GetInstallation(ctx, plan.stack, bundle.Name)
+	stored, err := records.GetInstallation(ctx, plan.stack, bundle.Name)
 	if err != nil && !errors.Is(err, storage.ErrNotFound) {
 		return err
 	}
@@ -460,7 +485,7 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 			parameters[name] = value
 		}
 	}
-	return nemo.store.SaveInstallation(ctx, storage.Installation{
+	return records.SaveInstallation(ctx, storage.Installation{
 		InstallationSpec: storage.InstallationSpec{
 			Name:        bundle.Name,
 			Stack:       plan.stack,

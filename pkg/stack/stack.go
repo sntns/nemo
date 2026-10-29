@@ -35,6 +35,10 @@ type Stack struct {
 	// docker://ghcr.io/sntns/{{ .Component }}:{{ .Version }}, or
 	// oci:.artifacts/prod/{{ .Component }}.oci, relative to the stack file.
 	Remote string `json:"remote,omitempty"`
+	// Records says where nemo keeps the records of the stack's
+	// installations: home, the default, with its manifest; or target, in a
+	// volume of the target, where whoever reaches the target finds them.
+	Records string `json:"records,omitempty"`
 	// Parameters go to every installation whose bundle declares a parameter
 	// of their name. An installation's own parameters override them.
 	Parameters map[string]string `json:"parameters,omitempty"`
@@ -97,6 +101,12 @@ func Read(path string) (Stack, error) {
 	return stack, nil
 }
 
+// Where nemo keeps the records of a stack's installations.
+const (
+	RecordsHome   = "home"
+	RecordsTarget = "target"
+)
+
 // stackName is a stack's name: a directory of the store.
 var stackName = regexp.MustCompile(`^[^/\\]+$`)
 
@@ -122,6 +132,7 @@ func (stack Stack) Validate() error {
 		validation.Field(&stack.Target),
 		validation.Field(&stack.Installer),
 		validation.Field(&stack.Remote, validation.When(len(byRemote) > 0, validation.Required.Error(noRemote))),
+		validation.Field(&stack.Records, validation.In(RecordsHome, RecordsTarget).Error("must be home or target")),
 		validation.Field(&stack.Installations, validation.Required, validation.Each(inStack)),
 	); err != nil {
 		return fmt.Errorf("stack %s: %w", stack.Name, err)

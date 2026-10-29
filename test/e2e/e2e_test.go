@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sntns/nemo/pkg/labels"
+	"github.com/sntns/nemo/pkg/storage/volume"
 )
 
 // work holds nemo, gill and the bundles, built once for every test.
@@ -188,10 +189,16 @@ func newStack(t *testing.T) *stack {
 // nemo runs the nemo command on the stack's home, and returns what it wrote.
 func (s *stack) nemo(args ...string) (string, error) {
 	s.t.Helper()
+	return s.nemoAt(s.home, args...)
+}
+
+// nemoAt runs the nemo command on another home, another machine's.
+func (s *stack) nemoAt(home string, args ...string) (string, error) {
+	s.t.Helper()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.t.Context()), 10*time.Minute)
 	defer cancel()
 	command := exec.CommandContext(ctx, filepath.Join(work, "nemo"), args...)
-	command.Env = append(os.Environ(), "NEMO_HOME="+s.home, "NO_COLOR=1", "GOCOVERDIR="+filepath.Join(work, "cover"))
+	command.Env = append(os.Environ(), "NEMO_HOME="+home, "NO_COLOR=1", "GOCOVERDIR="+filepath.Join(work, "cover"))
 	var output bytes.Buffer
 	command.Stdout, command.Stderr = &output, &output
 	err := command.Run()
@@ -208,6 +215,8 @@ type from struct {
 	images string
 	// volumes is the YAML of the target's volume types, indented under volumes.
 	volumes string
+	// records is where nemo keeps the records of the installations: home or target.
+	records string
 }
 
 // importManifest imports a stack of the fixture bundles on the orchestrator.
@@ -216,9 +225,12 @@ func (s *stack) importManifest(orchestrator string, port int, installations ...s
 	s.importManifestFrom(from{}, orchestrator, port, installations...)
 }
 
-func (s *stack) importManifestFrom(where from, orchestrator string, port int, installations ...string) {
+// importManifestFrom imports the stack, and returns its manifest, for
+// another home to import it too.
+func (s *stack) importManifestFrom(where from, orchestrator string, port int, installations ...string) string {
 	s.t.Helper()
 	manifest := fmt.Sprintf(`name: %s
+records: %s
 target:
   orchestrator: %s
   configuration:
@@ -233,7 +245,7 @@ credentials:
     source:
       value: s3cret
 installations:
-`, s.name, orchestrator, cmp.Or(where.images, "load"), cmp.Or(where.volumes, "      data: {}"), port)
+`, s.name, cmp.Or(where.records, "home"), orchestrator, cmp.Or(where.images, "load"), cmp.Or(where.volumes, "      data: {}"), port)
 	for _, installation := range installations {
 		manifest += fmt.Sprintf("  - name: %s\n    bundle:\n      version: 0.0.1\n", installation)
 	}
@@ -242,6 +254,7 @@ installations:
 	remote := cmp.Or(where.remote, "oci:"+filepath.Join(work, "bundles", "{{ .Component }}.oci"))
 	_, err := s.nemo("stack", "import", path, "--remote", remote, "--yes")
 	require.NoError(s.t, err)
+	return path
 }
 
 func (s *stack) byStack() client.Filters {
@@ -500,4 +513,54 @@ func TestStack_provisionsTheDirectoryOfAVolume(t *testing.T) {
 			assert.Equal(t, "served", page, "web wrote its page in the directory gill provisioned")
 		})
 	}
+}
+
+// A stack that keeps its records on its target is the same stack from every
+// home that imported it: a second machine sees what the first deployed. One
+// nemo writes it at a time, and a stack Terraform manages is not written
+// without --force.
+func TestStack_keepsItsRecordsOnTheTarget(t *testing.T) {
+	s := newStack(t)
+	s.after = append(s.after, func() {
+		_, _ = s.api.VolumeRemove(context.WithoutCancel(t.Context()), volume.Name(s.name), client.VolumeRemoveOptions{Force: true})
+	})
+	port := freePort(t)
+	remote := "oci:" + filepath.Join(work, "bundles", "{{ .Component }}.oci")
+	manifest := s.importManifestFrom(from{records: "target"}, "compose", port, bundles...)
+	_, err := s.nemo("up")
+	require.NoError(t, err)
+
+	other := t.TempDir()
+	_, err = s.nemoAt(other, "stack", "import", manifest, "--remote", remote, "--yes")
+	require.NoError(t, err)
+	status, err := s.nemoAt(other, "status")
+	require.NoError(t, err)
+	for _, bundle := range bundles {
+		assert.Contains(t, status, bundle, "the other home reads the target's records")
+	}
+	runs, err := s.nemoAt(other, "installation", "runs", "web")
+	require.NoError(t, err)
+	assert.Contains(t, runs, "install", "and the runs of the first")
+
+	held, err := volume.Open(t.Context(), s.api, s.name, true)
+	require.NoError(t, err)
+	output, err := s.nemo("up")
+	assert.Error(t, err)
+	assert.Contains(t, output, "is busy: another nemo writes it since")
+	_, err = s.nemo("status")
+	assert.NoError(t, err, "reading is not writing")
+	require.NoError(t, held.SetOwner(t.Context(), "terraform"))
+	require.NoError(t, held.Close(t.Context()))
+
+	output, err = s.nemoAt(other, "up")
+	assert.Error(t, err)
+	assert.Contains(t, output, "stack "+s.name+" is managed by terraform")
+	_, err = s.nemoAt(other, "up", "--force")
+	assert.NoError(t, err, "forced")
+	_, err = s.nemoAt(other, "down", "--purge", "--force")
+	require.NoError(t, err)
+
+	list, err := s.nemo("installation", "list")
+	require.NoError(t, err)
+	assert.Equal(t, len(bundles), strings.Count(list, "uninstalled"), "the first home sees the down of the other")
 }

@@ -26,6 +26,8 @@ installer:
 
 remote: "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}"
 
+records: home                                 # home (default) | target
+
 parameters:
   domain: shop.example.com
 
@@ -83,6 +85,13 @@ The location of the bundles whose installation gives a version alone, as a templ
 - `oci:PATH/{{ .Component }}.oci`: bundles in OCI layout directories. A relative path is relative to the manifest.
 
 `nemo stack import --remote` and `nemo stack set --remote` set it.
+
+## `records`
+
+Where nemo keeps the records of the stack's installations: their state, and every action run on them.
+
+- `home`, the default: in nemo's home, next to the manifest.
+- `target`: on the target, in a volume `nemo-records-<stack>`, where every home that imported the manifest finds them. See [records on the target](../guides/stacks.md#records-on-the-target).
 
 ## `parameters`
 
