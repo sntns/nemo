@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.5.0](https://github.com/sntns/nemo/compare/v0.4.0...v0.5.0) (2026-10-29)
+
+
+### Features
+
+* give a tcp:// target its TLS in its manifest, each part from a source ([a92c226](https://github.com/sntns/nemo/commit/a92c2267a6e4a4cc0937d6df4ae9acd197bb1b91))
+* keep a stack's records on its target, for every home that imports it ([16c7ea5](https://github.com/sntns/nemo/commit/16c7ea56810f065cab91af28013d0161f506367c))
+
+
+### Bug Fixes
+
+* **runtime:** connect to several Dockers at once without a race on the CLI's configuration ([6db90e6](https://github.com/sntns/nemo/commit/6db90e68e5c783997627b27f92985840a841872e))
+
 ## [0.4.0](https://github.com/sntns/nemo/compare/v0.3.2...v0.4.0) (2026-10-28)
 
 
