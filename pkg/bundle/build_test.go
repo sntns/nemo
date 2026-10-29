@@ -150,6 +150,10 @@ func TestBuild_variablesInTypedFields(t *testing.T) {
 		t.Parallel()
 		require.NoError(t, build(t, "    ports: [\"${WEB_PORT:-8080}:80\"]\n"))
 	})
+	t.Run("a config's content", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, build(t, "    configs: [page]\nconfigs:\n  page:\n    content: 'served by ${HOST}'\n"))
+	})
 	t.Run("an invalid default", func(t *testing.T) {
 		t.Parallel()
 		require.Error(t, build(t, "    deploy:\n      replicas: ${REPLICAS:-two}\n"))

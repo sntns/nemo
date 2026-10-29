@@ -138,7 +138,8 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 // buildable returns the documents as the build loads them, knowing no value of the variables yet. A
 // value that needs a variable without a default is left out: whatever it will be, it is checked
 // when the bundle runs. A value whose variables all have a default is checked with them. An image
-// keeps its variables, escaped: the build resolves it as written.
+// keeps its variables, escaped: the build resolves it as written; so does a config's content, which
+// has no type to check and can't be left out.
 func buildable(documents []cnab.ComposeDocument) []cnab.ComposeDocument {
 	result := make([]cnab.ComposeDocument, len(documents))
 	for i, document := range documents {
@@ -169,7 +170,7 @@ func withoutUnknowns(value any, path []string) any {
 		}
 		return copied
 	case string:
-		if len(path) == 3 && path[0] == "services" && path[2] == "image" {
+		if len(path) == 3 && (path[0] == "services" && path[2] == "image" || path[0] == "configs" && path[2] == "content") {
 			return strings.ReplaceAll(value, "$", "$$")
 		}
 		for _, variable := range template.ExtractVariables(map[string]any{"value": value}, template.DefaultPattern) {
