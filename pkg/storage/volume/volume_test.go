@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/sntns/nemo/pkg/target"
 )
 
 func archiveOf(t *testing.T, headers ...tar.Header) *bytes.Buffer {
@@ -48,4 +50,26 @@ func TestExtract(t *testing.T) {
 	assert.ErrorContains(t, outside, "not a path in the volume")
 	link := extract(archiveOf(t, tar.Header{Typeflag: tar.TypeSymlink, Name: "records/link", Linkname: "/etc/passwd"}), t.TempDir())
 	assert.ErrorContains(t, link, "neither a file nor a directory")
+}
+
+func TestRecordsVolume(t *testing.T) {
+	t.Parallel()
+	spec, provision, err := recordsVolume("shop", nil)
+	require.NoError(t, err)
+	assert.Equal(t, "nemo-records-shop", spec.Name)
+	assert.Empty(t, spec.Driver, "local, on the Docker nemo reaches")
+	assert.Nil(t, provision)
+
+	nfs := map[string]target.VolumeType{Type: {
+		VolumeDriver: target.VolumeDriver{Driver: "local", Options: map[string]string{"type": "nfs", "o": "addr=10.0.0.20,rw", "device": ":/exports/{{.Stack}}/{{.Name}}"}},
+		Provision:    &target.VolumeProvision{Directory: "{{.Stack}}/{{.Name}}", Volume: target.VolumeDriver{Options: map[string]string{"type": "nfs", "device": ":/exports"}}},
+	}}
+	spec, provision, err = recordsVolume("shop", nfs)
+	require.NoError(t, err)
+	assert.Equal(t, ":/exports/shop/nemo-records", spec.Options["device"], "the storage every manager mounts")
+	assert.Equal(t, "shop/nemo-records", provision.Directory)
+	assert.Equal(t, map[string]string{Label: "shop"}, spec.Labels)
+
+	_, _, err = recordsVolume("shop", map[string]target.VolumeType{Type: {VolumeDriver: target.VolumeDriver{Driver: "{{.Bundle}}"}}})
+	assert.ErrorContains(t, err, "volume type records: driver")
 }

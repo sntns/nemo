@@ -95,7 +95,7 @@ func (nemo *Nemo) open(ctx context.Context, manifest *stack.Stack, name string, 
 		if err != nil {
 			return nil, err
 		}
-		if opened.store, err = volume.Open(ctx, api, name, held); err != nil {
+		if opened.store, err = volume.Open(ctx, api, name, manifest.Target.Volumes, held); err != nil {
 			return nil, errors.Join(err, api.Close())
 		}
 		if held {

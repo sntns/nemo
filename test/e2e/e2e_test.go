@@ -542,7 +542,7 @@ func TestStack_keepsItsRecordsOnTheTarget(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, runs, "install", "and the runs of the first")
 
-	held, err := volume.Open(t.Context(), s.api, s.name, true)
+	held, err := volume.Open(t.Context(), s.api, s.name, nil, true)
 	require.NoError(t, err)
 	output, err := s.nemo("up")
 	assert.Error(t, err)

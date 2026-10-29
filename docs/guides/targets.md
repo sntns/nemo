@@ -116,6 +116,8 @@ The driver, its options and the provisioned directory are templates of the volum
 
 `provision` creates the directory before creating the volume, for drivers that mount a directory of a storage and need it to exist: gill mounts the storage, as described by `provision.volume`, in a container of its own image that never starts, and Docker's archive API writes the directory there. The target needs nothing else.
 
+The type `records` makes the volume of a stack's [records on the target](stacks.md#records-on-the-target), with `nemo-records` as its `{{.Name}}`: on a swarm of several managers, a storage they all mount.
+
 A volume that exists is never recreated: change a type's definition, and only new volumes get it. `--purge` removes the volumes, not the provisioned directories.
 
 On the command line, `nemo installation install --volumes types.json` reads the volume types from a JSON file of the same shape.
