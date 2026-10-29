@@ -1,11 +1,13 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io/fs"
 	"maps"
-	"os"
 	"path"
 	"strings"
 
@@ -17,22 +19,8 @@ import (
 	"github.com/sntns/nemo/pkg/target"
 )
 
-// ProvisionCommand is the command of the installer's image that creates a
-// directory, in the storage mounted at provisionMount: VolumeProvision runs
-// it, and the image answers it with Provision.
-const (
-	ProvisionCommand = "provision"
-	provisionMount   = "/provision"
-)
-
-// Provision is the installer image's side of VolumeProvision: it creates the
-// directory, which must be in the storage mounted at provisionMount.
-func Provision(directory string) error {
-	if !strings.HasPrefix(path.Clean(directory), provisionMount+"/") {
-		return fmt.Errorf("provisioning %s: not in %s", directory, provisionMount)
-	}
-	return os.MkdirAll(directory, 0o755)
-}
+// provisionMount is where a provisioning container mounts the storage.
+const provisionMount = "/provision"
 
 func (docker *Client) VolumeCreate(ctx context.Context, spec *volume.Volume) error {
 	options := client.VolumeCreateOptions{Name: spec.Name, Driver: spec.Driver, DriverOpts: spec.Options, Labels: spec.Labels}
@@ -73,10 +61,14 @@ func SameVolume(existing, spec *volume.Volume) bool {
 }
 
 // VolumeProvision creates the directory of a volume in the storage that
-// provision.Volume mounts: a temporary volume of that
-// storage is mounted in a container of the installer's own image, which
-// creates the directory.
+// provision.Volume mounts: a temporary volume of that storage is mounted in
+// a container of the image that never starts, and Docker's archive API
+// writes the directory there.
 func (docker *Client) VolumeProvision(ctx context.Context, image, registryAuth string, provision target.VolumeProvision) error {
+	directory, err := provisionArchive(provision.Directory)
+	if err != nil {
+		return err
+	}
 	storage := &volume.Volume{Name: "nemo-provision-" + rand.Text(), Driver: provision.Volume.Driver, Options: provision.Volume.Options}
 	if err := docker.VolumeCreate(ctx, storage); err != nil {
 		return err
@@ -87,7 +79,7 @@ func (docker *Client) VolumeProvision(ctx context.Context, image, registryAuth s
 		return err
 	}
 	id, err := docker.ContainerCreate(ctx, client.ContainerCreateOptions{
-		Config: &container.Config{Image: image, Cmd: []string{"/cnab/app/run", ProvisionCommand, path.Join(provisionMount, provision.Directory)}},
+		Config: &container.Config{Image: image, Cmd: []string{"provision"}},
 		HostConfig: &container.HostConfig{
 			Mounts: []mount.Mount{{Type: mount.TypeVolume, Source: storage.Name, Target: provisionMount}},
 		},
@@ -98,15 +90,26 @@ func (docker *Client) VolumeProvision(ctx context.Context, image, registryAuth s
 	}
 	defer func() { _ = docker.ContainerDelete(context.WithoutCancel(ctx), id) }()
 
-	if err = docker.ContainerStart(ctx, id); err != nil {
-		return err
-	}
-	code, err := docker.ContainerWait(ctx, id)
-	if err != nil {
+	if _, err := docker.api.CopyToContainer(ctx, id, client.CopyToContainerOptions{DestinationPath: provisionMount, Content: directory}); err != nil {
 		return fmt.Errorf("provisioning %s: %w", provision.Directory, err)
 	}
-	if code != 0 {
-		return fmt.Errorf("provisioning %s: the directory could not be created, exit code %d", provision.Directory, code)
-	}
 	return nil
+}
+
+// provisionArchive is the archive of the directory and its parents, which
+// must be in the storage.
+func provisionArchive(directory string) (*bytes.Buffer, error) {
+	clean := path.Clean(directory)
+	if !fs.ValidPath(clean) || clean == "." {
+		return nil, fmt.Errorf("provisioning %s: not a directory in the storage", directory)
+	}
+	var content bytes.Buffer
+	archive := tar.NewWriter(&content)
+	parts := strings.Split(clean, "/")
+	for i := range parts {
+		if err := archive.WriteHeader(&tar.Header{Typeflag: tar.TypeDir, Name: strings.Join(parts[:i+1], "/") + "/", Mode: 0o755}); err != nil {
+			return nil, err
+		}
+	}
+	return &content, archive.Close()
 }
