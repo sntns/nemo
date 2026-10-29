@@ -87,6 +87,13 @@ func Read(path string) (Stack, error) {
 	for i, strategy := range stack.Credentials {
 		stack.Credentials[i] = credentials.Absolute(strategy, directory)
 	}
+	if tls := stack.Target.TLS; tls != nil {
+		for _, source := range []*valuesource.Source{tls.CA, tls.Cert, tls.Key} {
+			if source != nil {
+				*source = credentials.Absolute(valuesource.Strategy{Source: *source}, directory).Source
+			}
+		}
+	}
 	for i, installation := range stack.Installations {
 		if file := installation.Bundle.File; file != "" && !filepath.IsAbs(file) {
 			stack.Installations[i].Bundle.File = filepath.Join(directory, file)

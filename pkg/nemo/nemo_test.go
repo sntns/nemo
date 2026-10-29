@@ -16,6 +16,7 @@ import (
 
 	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/runtime"
+	"github.com/sntns/nemo/pkg/stack"
 	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/storage/file"
 	"github.com/sntns/nemo/pkg/target"
@@ -271,4 +272,41 @@ func TestRuns(t *testing.T) {
 	assert.Equal(t, "succeeded", runs[0].Status, "with its result")
 	assert.Equal(t, []string{"token"}, runs[0].Credentials, "the credentials by name, from the claim's custom data")
 	assert.Equal(t, target.Compose, runs[0].Target.Orchestrator)
+}
+
+// The records keep the TLS's sources as the action had them, files of the
+// machine it ran on perhaps: an action reaches the target with the TLS of
+// the manifest nemo has, for its address.
+func TestTheManifestsTLSReachesTheTarget(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, token := setup(t)
+	home := filepath.Join(filepath.Dir(bundleFile), "home")
+	nemo.manifests = stack.NewStore(home)
+	tlsAt := func(directory string) *target.TLS {
+		file := func(name string) *valuesource.Source {
+			return &valuesource.Source{Key: "path", Value: filepath.Join(directory, name)}
+		}
+		return &target.TLS{CA: file("ca.pem"), Cert: file("cert.pem"), Key: file("key.pem")}
+	}
+	deployment := func(tls *target.TLS) target.Target {
+		return target.Target{Orchestrator: target.Swarm, Configuration: target.Configuration{Host: "tcp://vm1:2376", TLS: tls}}
+	}
+
+	_, err := nemo.Install(context.Background(), ActionRequest{
+		InstallationSpec: storage.InstallationSpec{Stack: "demo", Credentials: []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "path", Value: token}}}},
+		BundleSource:     bundleFile,
+		Target:           deployment(tlsAt("/ci")),
+	})
+	require.NoError(t, err)
+	stored, err := nemo.Installation(context.Background(), "demo", "nginx")
+	require.NoError(t, err)
+	assert.Equal(t, tlsAt("/ci"), stored.Target.TLS, "its sources recorded, as a credential's")
+
+	require.NoError(t, nemo.manifests.Save(stack.Stack{
+		Name: "demo", Target: deployment(tlsAt("/laptop")),
+		Installations: []storage.InstallationSpec{{Name: "nginx", Bundle: storage.BundleReference{File: bundleFile}}},
+	}, ""))
+	_, err = nemo.Uninstall(context.Background(), ActionRequest{InstallationSpec: demoNginx})
+	require.NoError(t, err)
+	assert.Equal(t, tlsAt("/laptop"), fake.last().Target.TLS, "the manifest's, for its address")
 }

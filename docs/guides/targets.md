@@ -36,10 +36,25 @@ nemo never guesses the orchestrator from the Docker it finds: a Docker that is a
 | nothing | The environment's Docker: `DOCKER_HOST`, else the current docker context, else the local socket. |
 | `host: unix:///var/run/docker.sock` | A local socket. |
 | `host: ssh://deploy@prod-1` | A Docker over SSH, with your SSH configuration and keys. The remote host needs the `docker` command. |
-| `host: tcp://10.0.0.5:2376` | A Docker over TCP, with TLS from `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY`. |
+| `host: tcp://10.0.0.5:2376` | A Docker over TCP, with TLS from `DOCKER_CERT_PATH` and `DOCKER_TLS_VERIFY`, or from `tls`. |
 | `context: prod-cluster` | A docker context, with its endpoint and TLS files: `docker context create prod-cluster --docker host=...`. |
 
 The target's address is the only one nemo needs: it runs gill there, and reads the status and logs from there. For a swarm, give the address of a manager.
+
+A `tcp://` host can be given its TLS in the manifest instead of the environment: the CA of the daemon's certificate, else the system's, and the client's certificate and key, in PEM. Each is read from a source, as a credential is, and nemo keeps the source: a file, a variable or a command keeps its value out of the manifest; a value is in it.
+
+```yaml
+target:
+  orchestrator: swarm
+  configuration:
+    host: tcp://10.0.0.5:2376
+    tls:
+      ca: { path: certs/ca.pem }
+      cert: { path: certs/cert.pem }
+      key: { env: DOCKER_KEY }
+```
+
+The records of an installation keep the TLS it was deployed with; nemo reaches the target with the TLS of the manifest it has for that address, a file of another machine's being none of its own.
 
 ## How images arrive
 
