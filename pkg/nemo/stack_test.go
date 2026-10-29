@@ -446,3 +446,21 @@ func TestUpChecksEveryBundleFirst(t *testing.T) {
 	assert.ElementsMatch(t, []string{"install cache", "install database", "install web"}, actions(4), "a bundle that can't be checked is installed in its turn")
 	assert.Len(t, result.Runs, 3)
 }
+
+// A down gives each uninstall the credentials of the manifest, which the
+// records keep without their value: the installation's own over the
+// stack's.
+func TestManifestCredentials(t *testing.T) {
+	t.Parallel()
+	stacks := func(name string) valuesource.Strategy {
+		return valuesource.Strategy{Name: name, Source: valuesource.Source{Key: "value", Value: "the stack's"}}
+	}
+	own := valuesource.Strategy{Name: "token", Source: valuesource.Source{Key: "value", Value: "nginx's"}}
+	nemo := &Nemo{opened: map[string]*session{"demo": {manifest: &stack.Stack{
+		Credentials:   []valuesource.Strategy{stacks("token"), stacks("password"), stacks("undeclared")},
+		Installations: []storage.InstallationSpec{{Name: "nginx", Credentials: []valuesource.Strategy{own}}},
+	}}}}
+	nginx := cnab.ExtendedBundle{Bundle: bundle.Bundle{Name: "nginx", Credentials: map[string]bundle.Credential{"token": {}, "password": {}}}}
+	assert.Equal(t, []valuesource.Strategy{stacks("password"), own}, nemo.manifestCredentials("demo", nginx))
+	assert.Nil(t, nemo.manifestCredentials("other", nginx), "a stack nemo has no manifest of")
+}

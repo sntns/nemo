@@ -244,6 +244,49 @@ func TestNothingSecretIsWritten(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// A credential, or a part of the target's TLS, given by value is recorded
+// without its value: an action that needs it is given it again, and one
+// that does not, an uninstall, goes on without it.
+func TestAValueIsNotRecorded(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	byValue := []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "value", Value: "v4lue"}}}
+	ca := "-----BEGIN CERTIFICATE-----"
+	deployment := target.Target{Orchestrator: target.Compose, Configuration: target.Configuration{
+		Host: "tcp://10.1.0.10:2376", TLS: &target.TLS{CA: &valuesource.Source{Key: "value", Value: ca}},
+	}}
+
+	run, err := nemo.Install(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Stack: "demo", Credentials: byValue}, BundleSource: bundleFile, Target: deployment})
+	require.NoError(t, err)
+	assert.Equal(t, valuesource.Set{"token": "v4lue"}, fake.last().Credentials, "the action has it")
+	assert.Equal(t, ca, fake.last().Target.TLS.CA.Value, "and reaches the target with it")
+	assert.Equal(t, Redacted, run.Target.TLS.CA.Value, "not returned")
+	err = filepath.Walk(filepath.Join(filepath.Dir(bundleFile), "home"), func(path string, info os.FileInfo, err error) error {
+		require.NoError(t, err)
+		if info.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		for _, secret := range []string{"v4lue", ca} {
+			assert.False(t, strings.Contains(string(data), secret), "%s holds %s", path, secret)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	installation, err := nemo.Installation(ctx, "demo", "nginx")
+	require.NoError(t, err)
+	assert.Equal(t, []valuesource.Strategy{{Name: "token", Source: valuesource.Source{Key: "value", Value: Redacted}}}, installation.Credentials, "its source kept")
+
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: demoNginx})
+	require.ErrorContains(t, err, "credential token was given by value, which nemo does not record: give it again")
+	_, err = nemo.Upgrade(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Name: "nginx", Stack: "demo", Credentials: byValue}})
+	require.NoError(t, err, "given again")
+	_, err = nemo.Uninstall(ctx, ActionRequest{InstallationSpec: demoNginx})
+	assert.NoError(t, err, "token applies to install and upgrade only")
+}
+
 func TestInstallationStatus(t *testing.T) {
 	t.Parallel()
 	nemo, _, bundleFile, token := setup(t)

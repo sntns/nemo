@@ -7,7 +7,9 @@
 //	    source: { path: /tmp/token }   # env, path, command or value
 //
 // Only the source of a credential is ever kept: its value is read when the
-// action runs, handed to the runtime, and never written anywhere.
+// action runs, handed to the runtime, and never written anywhere. A value
+// source is recorded without its value: the action that needs it is given
+// it again.
 package credentials
 
 import (
@@ -25,6 +27,42 @@ import (
 
 	"github.com/sntns/nemo/pkg/cnab"
 )
+
+// Redacted stands for a secret nemo does not record: the value of a value
+// source, of a sensitive parameter or of a write-only output.
+const Redacted = "*******"
+
+// Recorded returns the strategies as nemo records them, their value sources
+// without their value.
+func Recorded(strategies []valuesource.Strategy) []valuesource.Strategy {
+	if strategies == nil {
+		return nil
+	}
+	recorded := make([]valuesource.Strategy, len(strategies))
+	for i, strategy := range strategies {
+		strategy.Source = *RecordedSource(&strategy.Source)
+		recorded[i] = strategy
+	}
+	return recorded
+}
+
+// RecordedSource returns the source as nemo records it.
+func RecordedSource(source *valuesource.Source) *valuesource.Source {
+	if source == nil {
+		return nil
+	}
+	recorded := *source
+	if recorded.Key == host.SourceValue {
+		recorded.Value = Redacted
+	}
+	return &recorded
+}
+
+// IsUnrecorded reports whether the source is a value source as nemo
+// records it, without its value.
+func IsUnrecorded(source valuesource.Source) bool {
+	return source.Key == host.SourceValue && source.Value == Redacted
+}
 
 // Parse reads the command-line form of a credential's source, KEY:VALUE,
 // where KEY is a source of the specification: env, path, command or value.
@@ -81,6 +119,8 @@ func Resolve(strategies []valuesource.Strategy, bundle cnab.ExtendedBundle, acti
 		switch {
 		case !declared:
 			errs = append(errs, fmt.Errorf("credential %s is not declared by the bundle %s", strategy.Name, bundle.Name))
+		case credential.AppliesTo(action) && IsUnrecorded(strategy.Source):
+			errs = append(errs, fmt.Errorf("credential %s was given by value, which nemo does not record: give it again, in the manifest or with --credential", strategy.Name))
 		case credential.AppliesTo(action):
 			set.Credentials = append(set.Credentials, strategy)
 		}

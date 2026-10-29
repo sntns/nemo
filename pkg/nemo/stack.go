@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/cnabio/cnab-go/valuesource"
+
 	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/progress"
@@ -373,7 +375,7 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		if _, declared := bundle.Parameters[cnab.ParameterPurge]; declared && purge {
 			parameters = map[string]string{cnab.ParameterPurge: strconv.FormatBool(purge)}
 		}
-		spec := storage.InstallationSpec{Name: bundle.Name, Stack: stackName, Parameters: parameters}
+		spec := storage.InstallationSpec{Name: bundle.Name, Stack: stackName, Parameters: parameters, Credentials: nemo.manifestCredentials(stackName, bundle)}
 		run, err := nemo.Uninstall(ctx, ActionRequest{InstallationSpec: spec, Progress: events})
 		if run.Revision != "" {
 			runs = append(runs, run)
@@ -383,4 +385,23 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		}
 	}
 	return runs, nil
+}
+
+// manifestCredentials are the credentials the manifest of the operation
+// gives the bundle, the stack's under the installation's own: those the
+// records keep without their value.
+func (nemo *Nemo) manifestCredentials(stackName string, bundle cnab.ExtendedBundle) []valuesource.Strategy {
+	nemo.mutex.Lock()
+	defer nemo.mutex.Unlock()
+	opened, ok := nemo.opened[stackName]
+	if !ok || opened.manifest == nil {
+		return nil
+	}
+	var own []valuesource.Strategy
+	for _, installation := range opened.manifest.Installations {
+		if installation.Name == bundle.Name {
+			own = installation.Credentials
+		}
+	}
+	return credentials.Merge(bundle, opened.manifest.Credentials, own)
 }

@@ -41,7 +41,7 @@ nemo never guesses the orchestrator from the Docker it finds: a Docker that is a
 
 The target's address is the only one nemo needs: it runs gill there, and reads the status and logs from there. For a swarm, give the address of a manager.
 
-A `tcp://` host can be given its TLS in the manifest instead of the environment: the CA of the daemon's certificate, else the system's, and the client's certificate and key, in PEM. Each is read from a source, as a credential is, and nemo keeps the source: a file, a variable or a command keeps its value out of the manifest; a value is in it.
+A `tcp://` host can be given its TLS in the manifest instead of the environment: the CA of the daemon's certificate, else the system's, and the client's certificate and key, in PEM. Each is read from a source, as a credential is, and nemo keeps the source: a file, a variable or a command keeps its value out of the manifest; a value is in it, and the records keep its source without it, so an action without the manifest stops and says so.
 
 ```yaml
 target:

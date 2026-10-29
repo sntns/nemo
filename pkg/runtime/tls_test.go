@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/target"
 )
 
@@ -107,4 +108,6 @@ func TestConnect_tls(t *testing.T) {
 
 	_, err = Connect(target.Target{Configuration: target.Configuration{Host: host, TLS: &target.TLS{CA: value("not a certificate")}}})
 	assert.ErrorContains(t, err, "its CA is not a PEM certificate")
+	_, err = Connect(target.Target{Configuration: target.Configuration{Host: host, TLS: &target.TLS{CA: credentials.RecordedSource(value(ca.pem))}}})
+	assert.ErrorContains(t, err, "its CA was given by value, which nemo does not record", "as the records keep it")
 }

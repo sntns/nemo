@@ -121,8 +121,9 @@ type BundleVersion struct {
 	Version string `json:"version"`
 }
 
-// Redacted replaces the value of a sensitive parameter or output.
-const Redacted = "*******"
+// Redacted replaces the value of a sensitive parameter or output, and of a
+// value source.
+const Redacted = credentials.Redacted
 
 // Install installs the bundle. Installing again an installed bundle applies
 // it again, as an upgrade does.
@@ -205,7 +206,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Credentials: values,
 		Relocation:  plan.relocation,
 		Source:      plan.source,
-		Custom:      storage.RunCustom{Target: plan.target, Installer: plan.installer, Credentials: plan.credentials, RelocationMap: plan.relocation},
+		Custom:      storage.RunCustom{Target: recordedTarget(plan.target), Installer: plan.installer, Credentials: credentials.Recorded(plan.credentials), RelocationMap: plan.relocation},
 		Progress:    events,
 	})
 	if run.Claim.ID == "" || request.Validate {
@@ -222,7 +223,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Revision:     run.Claim.Revision,
 		Action:       run.Claim.Action,
 		Bundle:       BundleVersion{Name: plan.bundle.Name, Version: plan.bundle.Version},
-		Target:       plan.target,
+		Target:       recordedTarget(plan.target),
 		Driver:       plan.installer.DriverName(),
 		Parameters:   run.Claim.Parameters,
 		Credentials:  slices.Sorted(maps.Keys(values)),
@@ -379,6 +380,15 @@ func LoadBundle(ctx context.Context, source string) (cnab.BundleReference, error
 	return cnab.BundleReference{Definition: extended}, err
 }
 
+// recordedTarget is the target as nemo records it: its TLS given by value
+// without its value.
+func recordedTarget(deployment target.Target) target.Target {
+	if tls := deployment.TLS; tls != nil {
+		deployment.TLS = &target.TLS{CA: credentials.RecordedSource(tls.CA), Cert: credentials.RecordedSource(tls.Cert), Key: credentials.RecordedSource(tls.Key)}
+	}
+	return deployment
+}
+
 // sameTarget returns the installation's target, completed by the one
 // given, which can only repeat it: an installation is not moved. Its volume
 // types can change, the volumes that exist kept as they are, and so can how
@@ -492,9 +502,9 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 			Stack:       plan.stack,
 			Bundle:      plan.reference,
 			Parameters:  parameters,
-			Credentials: plan.credentials,
+			Credentials: credentials.Recorded(plan.credentials),
 		},
-		Target:        plan.target,
+		Target:        recordedTarget(plan.target),
 		Installer:     plan.installer,
 		RelocationMap: plan.relocation,
 		Status:        status,
