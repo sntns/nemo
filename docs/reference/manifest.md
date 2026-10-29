@@ -94,7 +94,7 @@ The location of the bundles whose installation gives a version alone, as a templ
 Where nemo keeps the records of the stack's installations: their state, and every action run on them.
 
 - `home`, the default: in nemo's home, next to the manifest.
-- `target`: on the target, in a volume `nemo-records-<stack>`, where every home that imported the manifest finds them. See [records on the target](../guides/stacks.md#records-on-the-target).
+- `target`: on the target, in a volume `nemo-records-<stack>`, where every home that imported the manifest finds them; of the target's volume type `records` when it has one, a storage every manager of a swarm mounts. See [records on the target](../guides/stacks.md#records-on-the-target).
 
 ## `parameters`
 
