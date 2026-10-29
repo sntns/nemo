@@ -213,10 +213,18 @@ func Connect(deploymentTarget target.Target) (client.APIClient, error) {
 }
 
 // dockerCLI returns the Docker client of the target: at its host or through
-// its docker context, else the environment's, as the docker CLI connects.
-// Its own messages are dropped.
+// its docker context, else the environment's, as the docker CLI connects;
+// with the target's TLS, when it holds one. Its own messages are dropped.
 func dockerCLI(deploymentTarget target.Target) (command.Cli, error) {
-	cli, err := command.NewDockerCli(command.WithCombinedStreams(io.Discard))
+	options := []command.CLIOption{command.WithCombinedStreams(io.Discard)}
+	if deploymentTarget.TLS != nil {
+		httpClient, err := tlsClient(*deploymentTarget.TLS)
+		if err != nil {
+			return nil, err
+		}
+		options = append(options, command.WithAPIClientOptions(client.WithHTTPClient(httpClient)))
+	}
+	cli, err := command.NewDockerCli(options...)
 	if err != nil {
 		return nil, fmt.Errorf("creating the Docker client: %w", err)
 	}

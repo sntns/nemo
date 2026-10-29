@@ -4,8 +4,13 @@
 package target
 
 import (
+	"regexp"
+
+	"github.com/cnabio/cnab-go/valuesource"
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 )
+
+var tcpHost = regexp.MustCompile(`^tcp://`)
 
 // Orchestrators of a target.
 const (
@@ -57,6 +62,27 @@ type Configuration struct {
 	// Images says how the images reach the target: registry, the default,
 	// or load.
 	Images string `json:"images,omitempty"`
+	// TLS is how nemo reaches a tcp:// Host that checks its clients,
+	// instead of DOCKER_CERT_PATH and DOCKER_TLS_VERIFY.
+	TLS *TLS `json:"tls,omitempty"`
+}
+
+// TLS is the TLS of a Docker's address: the CA that signed the daemon's
+// certificate, else the system's, and the client's certificate and key, in
+// PEM. Each is read from its source, as a credential is: a file, a
+// variable, a command, or the value itself. nemo keeps the source.
+type TLS struct {
+	CA   *valuesource.Source `json:"ca,omitempty"`
+	Cert *valuesource.Source `json:"cert,omitempty"`
+	Key  *valuesource.Source `json:"key,omitempty"`
+}
+
+// Validate checks that the certificate and the key are given together.
+func (tls TLS) Validate() error {
+	return validation.ValidateStruct(&tls,
+		validation.Field(&tls.Cert, validation.When(tls.Key != nil, validation.NotNil.Error("give the client's certificate with its key"))),
+		validation.Field(&tls.Key, validation.When(tls.Cert != nil, validation.NotNil.Error("give the client's key with its certificate"))),
+	)
 }
 
 // VolumeDriver is a volume driver and its options.
@@ -95,7 +121,9 @@ func (target Target) Validate() error {
 // Validate checks the configuration, and each of its volume types.
 func (configuration Configuration) Validate() error {
 	return validation.ValidateStruct(&configuration,
-		validation.Field(&configuration.Host, validation.When(configuration.Context != "", validation.Empty.Error("give a host or a docker context, not both"))),
+		validation.Field(&configuration.Host, validation.When(configuration.Context != "", validation.Empty.Error("give a host or a docker context, not both")),
+			validation.When(configuration.TLS != nil, validation.Match(tcpHost).Error("TLS is for a tcp:// host"))),
+		validation.Field(&configuration.TLS),
 		validation.Field(&configuration.Volumes),
 		validation.Field(&configuration.Images, validation.In(ImagesRegistry, ImagesLoad).Error("must be registry or load")),
 	)

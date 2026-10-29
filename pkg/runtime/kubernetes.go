@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/cnabio/cnab-go/driver"
+	dockercontext "github.com/docker/cli/cli/context"
 	"github.com/docker/cli/cli/context/docker"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +58,15 @@ func newKubernetesDriver(deploymentTarget target.Target, settings target.Kuberne
 	if err != nil {
 		return nil, err
 	}
-	environment, files, err := dockerEnvironment(cli.DockerEndpoint())
+	endpoint := cli.DockerEndpoint()
+	if given := deploymentTarget.TLS; given != nil {
+		read, err := readTLS(*given)
+		if err != nil {
+			return nil, err
+		}
+		endpoint.TLSData = &dockercontext.TLSData{CA: read.ca, Cert: read.cert, Key: read.key}
+	}
+	environment, files, err := dockerEnvironment(endpoint)
 	if err != nil {
 		return nil, err
 	}

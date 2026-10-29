@@ -24,6 +24,11 @@ name: demo
 target:
   orchestrator: swarm
   configuration:
+    host: tcp://vm1:2376
+    tls:
+      ca: { path: certs/ca.pem }
+      cert: { path: certs/cert.pem }
+      key: { env: DOCKER_KEY }
     volumes:
       data:
         driver: local
@@ -44,6 +49,8 @@ installations:
 	assert.Equal(t, "demo", stack.Name)
 	assert.Equal(t, target.Swarm, stack.Target.Orchestrator)
 	assert.Equal(t, "local", stack.Target.Volumes["data"].Driver, "the target's JSON names")
+	assert.Equal(t, filepath.Join(directory, "certs/ca.pem"), stack.Target.TLS.CA.Value, "the target's TLS, relative to the stack file")
+	assert.Equal(t, valuesource.Source{Key: "env", Value: "DOCKER_KEY"}, *stack.Target.TLS.Key)
 	assert.Equal(t, filepath.Join(directory, "certs/tls.pem"), stack.Credentials[0].Source.Value, "the stack's credentials, relative to the stack file")
 	nginx := stack.Installations[0]
 	assert.Equal(t, "demo", nginx.Stack, "the stack's installations are in it")

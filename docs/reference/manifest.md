@@ -9,6 +9,7 @@ target:                                       # required
   orchestrator: swarm                         # required: compose | swarm
   configuration:
     host: ssh://deploy@prod-1.example.com     # or context; neither: the environment's Docker
+    # tls: { ca: { path: certs/ca.pem }, cert: { path: certs/cert.pem }, key: { env: DOCKER_KEY } }   # a tcp:// host
     images: registry                          # registry (default) | load
     volumes:
       data:
@@ -58,6 +59,8 @@ Where the bundles are deployed. See the [targets guide](../guides/targets.md).
 | `orchestrator` | `compose` \| `swarm` | **Required.** How the bundles are deployed. |
 | `configuration.host` | string | The target's Docker: `unix://PATH`, `tcp://HOST:PORT`, `ssh://USER@HOST`. Not with `context`. |
 | `configuration.context` | string | A docker context to reach the target with. Not with `host`. |
+| `configuration.tls.ca` | source | The CA of a `tcp://` host's certificate, in PEM. Default: the system's. |
+| `configuration.tls.cert`, `configuration.tls.key` | source | The client's certificate and key, in PEM, given together. |
 | `configuration.images` | `registry` \| `load` | How the images reach the target. Default: `registry`. |
 | `configuration.volumes` | map | The target's volume types, by name. |
 | `configuration.volumes.<type>.driver` | string | The volume driver. A template. |
