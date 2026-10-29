@@ -114,6 +114,7 @@ var (
 	RuntimeExtensions = []ExtensionDefinition{
 		DependenciesExtension,
 		DockerExtension,
+		ParameterSourcesExtension,
 	}
 
 	// InstallerExtensions are read by the installer, never by the runtime.

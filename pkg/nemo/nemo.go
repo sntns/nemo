@@ -289,9 +289,49 @@ func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest
 	plan.target, plan.installer = request.Target, request.Installer
 	plan.parameters, plan.credentials = maps.Clone(request.Parameters), request.Credentials
 	if known && (installed || action != cnab.ActionInstall) {
-		return plan, plan.goOnFrom(stored, request)
+		if err := plan.goOnFrom(stored, request); err != nil {
+			return plan, err
+		}
 	}
-	return plan, nil
+	return plan, nemo.sourceParameters(ctx, &plan, action, name)
+}
+
+// sourceParameters gives each parameter the bundle reads from an output, and
+// the action is not given, the output of the installation's last run that
+// has it.
+func (nemo *Nemo) sourceParameters(ctx context.Context, plan *actionPlan, action, name string) error {
+	if plan.bundle.ParameterSources == nil {
+		return nil
+	}
+	records := nemo.records(plan.stack)
+	var results []cnab.Result
+	for parameter, source := range *plan.bundle.ParameterSources {
+		declaration, declared := plan.bundle.Parameters[parameter]
+		output, fromOutput := source.Output()
+		if _, given := plan.parameters[parameter]; given || !declared || !fromOutput || !declaration.AppliesTo(action) {
+			continue
+		}
+		if results == nil {
+			var err error
+			if results, err = records.ListResults(ctx, plan.stack, name); err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+		}
+		for _, result := range slices.Backward(results) {
+			outputs, err := records.GetOutputs(ctx, plan.stack, name, result.ID)
+			if err != nil {
+				return err
+			}
+			if value, ok := outputs[output]; ok && value != Redacted {
+				if plan.parameters == nil {
+					plan.parameters = map[string]string{}
+				}
+				plan.parameters[parameter] = value
+				break
+			}
+		}
+	}
+	return nil
 }
 
 // givenBundle is the request's bundle: the one loaded already, else the one
@@ -492,7 +532,8 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 
 	parameters := map[string]string{}
 	for name, value := range plan.parameters {
-		if name != cnab.ParameterOrchestrator && !bundle.IsSensitiveParameter(name) {
+		// A sourced parameter is read again from its output at each action.
+		if name != cnab.ParameterOrchestrator && !bundle.IsSensitiveParameter(name) && !bundle.IsSourced(name) {
 			parameters[name] = value
 		}
 	}

@@ -20,7 +20,7 @@ nemo deploys the same files to a swarm, and also orders several stacks by their 
 
 [Porter](https://porter.sh) is a general CNAB tool: bundles describe their installation with `porter.yaml` and mixins (Helm, Terraform, cloud CLIs, scripts), for any kind of target.
 
-nemo is specialised for applications made of containers on Docker. Its bundles are made from the compose files you already have, with no installer to write: gill deploys them with Compose or Swarm. On top of CNAB, it adds stacks of bundles on one target, image loading without a registry, volume types per target, live progress, status and logs. Both follow CNAB; nemo's bundles are designed to run with other CNAB runtimes too.
+nemo is specialised for applications made of containers on Docker. Its bundles are made from the compose files you already have, with no installer to write: gill deploys them with Compose or Swarm. On top of CNAB, it adds stacks of bundles on one target, image loading without a registry, volume types per target, live progress, status and logs. Both follow CNAB. Porter installs nemo's bundles, with `--allow-docker-host-access` for gill. nemo refuses Porter's: every bundle Porter builds requires `sh.porter.file-parameters`, an extension of Porter's own, outside the CNAB spec, and a CNAB runtime refuses a bundle that requires an extension it does not honour.
 
 ## Helm
 
