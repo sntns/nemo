@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/sntns/nemo/compare/v0.5.1...v0.6.0) (2026-10-29)
+
+
+### Features
+
+* keep a stack's records on the storage of the target's records type, held by the whole swarm ([44d97a1](https://github.com/sntns/nemo/commit/44d97a1ee8a0be9520c4777e5e03096a70872014))
+* record a value source without its value ([ad79215](https://github.com/sntns/nemo/commit/ad792158bca78b46e9d9ffa376206a4585fb5e9a))
+
 ## [0.5.1](https://github.com/sntns/nemo/compare/v0.5.0...v0.5.1) (2026-10-29)
 
 
