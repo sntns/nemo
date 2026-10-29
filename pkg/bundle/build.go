@@ -21,6 +21,7 @@ import (
 
 	"github.com/sntns/nemo/internal/decode"
 	"github.com/sntns/nemo/pkg/cnab"
+	"github.com/sntns/nemo/pkg/installer"
 	"github.com/sntns/nemo/pkg/transfer"
 )
 
@@ -265,9 +266,22 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		case secret.File != "":
 			errs = append(errs, fmt.Errorf("secrets.%s: a bundle carries no files: use environment, filled by a credential", key))
 		case secret.Environment != "":
+			claim, err := installer.CredentialClaimOf(secret.Extensions)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("secrets.%s: %w", key, err))
+				continue
+			}
+			// CNAB has no condition: a credential gill requires on its parameters is optional to the runtime.
+			if claim != nil {
+				for _, name := range slices.Sorted(maps.Keys(claim.RequiredIf)) {
+					if _, declared := built.Parameters[name]; !declared {
+						errs = append(errs, fmt.Errorf("secrets.%s: %s: required-if: the bundle has no parameter %s", key, installer.CredentialExtension, name))
+					}
+				}
+			}
 			built.Credentials[parameterName(secret.Environment)] = bundle.Credential{
 				Location: bundle.Location{EnvironmentVariable: secret.Environment},
-				Required: true,
+				Required: claim == nil,
 				ApplyTo:  []string{cnab.ActionInstall, cnab.ActionUpgrade},
 			}
 		}

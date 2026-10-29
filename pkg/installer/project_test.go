@@ -81,6 +81,77 @@ func TestLoadProject(t *testing.T) {
 	assert.Equal(t, "s3cret", project.Compose.Secrets["token"].Content, "credentials feed secrets")
 }
 
+// A secret whose credential x-nemo-credential requires on the parameters:
+// given, it is the service's; not given and not required, the services do
+// without it; not given and required, the install stops. A parameter also
+// picks the config a service mounts, by its name.
+func TestLoadProject_credentialRequiredIf(t *testing.T) {
+	t.Parallel()
+
+	operationWith := func(environment map[string]string) Operation {
+		cnabBundle := testBundle(func(cnabBundle *bundle.Bundle) {
+			withCompose(map[string]any{
+				"services": map[string]any{"proxy": map[string]any{
+					"image":   "traefik:v3.6.2",
+					"configs": []any{map[string]any{"source": "tls-${TLS}", "target": "/configuration/tls.yml"}},
+					"secrets": []any{"certificate", "dns-token"},
+				}},
+				"configs": map[string]any{
+					"tls-certificate": map[string]any{"content": "certificate"},
+					"tls-acme":        map[string]any{"content": "acme"},
+				},
+				"secrets": map[string]any{
+					"certificate": map[string]any{"environment": "CERTIFICATE", CredentialExtension: map[string]any{"required-if": map[string]any{"tls": "certificate"}}},
+					"dns-token":   map[string]any{"environment": "DNS_TOKEN", CredentialExtension: map[string]any{"required-if": map[string]any{"tls": "acme", "dns-auth": "token"}}},
+				},
+			})(cnabBundle)
+			cnabBundle.Definitions = definition.Definitions{
+				"tls":      &definition.Schema{Type: "string", Default: "certificate"},
+				"dns-auth": &definition.Schema{Type: "string", Default: "token"},
+			}
+			cnabBundle.Parameters = map[string]bundle.Parameter{
+				"tls":      {Definition: "tls", Destination: &bundle.Location{EnvironmentVariable: "TLS"}},
+				"dns-auth": {Definition: "dns-auth", Destination: &bundle.Location{EnvironmentVariable: "DNS_AUTH"}},
+			}
+			cnabBundle.Credentials = map[string]bundle.Credential{
+				"certificate": {Location: bundle.Location{EnvironmentVariable: "CERTIFICATE"}},
+				"dns-token":   {Location: bundle.Location{EnvironmentVariable: "DNS_TOKEN"}},
+			}
+		})
+		operation, err := ReadOperation(container(t, cnabBundle, environment, nil))
+		require.NoError(t, err)
+		return operation
+	}
+	secretsOf := func(service types.ServiceConfig) []string {
+		var sources []string
+		for _, secret := range service.Secrets {
+			sources = append(sources, secret.Source)
+		}
+		return sources
+	}
+
+	project, err := LoadProject(context.Background(), operationWith(map[string]string{"CERTIFICATE": "PEM"}))
+	require.NoError(t, err)
+	proxy := project.Compose.Services["proxy"]
+	assert.Equal(t, []string{"certificate"}, secretsOf(proxy), "the DNS token, not required by default, left out")
+	assert.Equal(t, "tls-certificate", proxy.Configs[0].Source, "the config the parameter names")
+	assert.NotContains(t, project.Compose.Secrets, "dns-token")
+
+	project, err = LoadProject(context.Background(), operationWith(map[string]string{"TLS": "acme", "DNS_TOKEN": "t0ken"}))
+	require.NoError(t, err)
+	proxy = project.Compose.Services["proxy"]
+	assert.Equal(t, []string{"dns-token"}, secretsOf(proxy))
+	assert.Equal(t, "tls-acme", proxy.Configs[0].Source)
+
+	_, err = LoadProject(context.Background(), operationWith(map[string]string{"TLS": "acme", "DNS_AUTH": "identity"}))
+	require.NoError(t, err, "an identity of the host, no token")
+
+	_, err = LoadProject(context.Background(), operationWith(map[string]string{"TLS": "acme"}))
+	assert.EqualError(t, err, "secrets.dns-token: the credential dns-token is required when dns-auth is token and tls is acme")
+	_, err = LoadProject(context.Background(), operationWith(nil))
+	assert.EqualError(t, err, "secrets.certificate: the credential certificate is required when tls is certificate")
+}
+
 func TestLoadProject_credentialsDoNotInterpolate(t *testing.T) {
 	t.Parallel()
 

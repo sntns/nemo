@@ -193,6 +193,9 @@ func (operation Operation) resolveFileObjects(compose *types.Project, parameters
 		return object, nil
 	}
 
+	if err := operation.withoutOptionalSecrets(compose, variables); err != nil {
+		return err
+	}
 	for _, key := range slices.Sorted(maps.Keys(compose.Configs)) {
 		object, err := resolve("configs", key, types.FileObjectConfig(compose.Configs[key]))
 		if err != nil {

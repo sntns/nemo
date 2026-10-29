@@ -86,6 +86,30 @@ secrets:
 
 The stack says where each credential's value comes from (a file, an environment variable, a command), and nemo reads it when the action runs. The value reaches gill for that action only, and nemo never stores it. See [credentials](stacks.md#credentials).
 
+A credential needed in one mode only, say a certificate given or a token to ask one from a DNS provider, can be required on parameters instead. `x-nemo-credential` says when:
+
+```yaml
+services:
+  proxy:
+    image: shop-proxy:latest
+    configs:
+      - source: tls-${TLS:-certificate}   # the parameter picks the config
+        target: /etc/proxy/tls.yml
+    secrets: [certificate, dns-token]
+
+secrets:
+  certificate:
+    environment: CERTIFICATE
+    x-nemo-credential:
+      required-if: { tls: certificate }
+  dns-token:
+    environment: DNS_TOKEN
+    x-nemo-credential:
+      required-if: { tls: acme, dns-auth: token }   # every parameter must match
+```
+
+With `tls: acme` and `dns-token` given, the proxy gets `dns-token` and not `certificate`, which the stack does not give: a secret whose credential is neither given nor required is left out of the services. With `tls: acme` and no `dns-token`, the install stops: `the credential dns-token is required when dns-auth is token and tls is acme`. CNAB has no such condition: to a CNAB runtime, Porter's as nemo's, the credential is optional, and gill checks the condition at the start of the install or upgrade.
+
 **A bundle carries no files.** A config or secret read from a `file:` is refused at build time: the file would not exist on the target. Use `content:` for a config written in the compose file, or `environment:` to fill it from a parameter or a credential.
 
 ## Volumes get a type

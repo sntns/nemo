@@ -39,13 +39,31 @@ volumes:
 
 A volume with a type can't set `driver`, `driver_opts` or `external`.
 
+## `x-nemo-credential`
+
+A block of a top-level secret read from a variable, saying when its credential is required:
+
+```yaml
+secrets:
+  certificate:
+    environment: CERTIFICATE
+    x-nemo-credential:
+      required-if: { tls: certificate }
+```
+
+| Field | Type | |
+|---|---|---|
+| `required-if` | map of parameter to value | **Required.** The credential is required when every parameter has its value, defaults included. Each must be a parameter of the bundle. |
+
+The bundle declares the credential optional, as CNAB has no condition. gill checks it on install and upgrade: a credential required and not given stops the action; one neither given nor required leaves its secret out of the services.
+
 ## What becomes what
 
 | In the compose files | In the bundle |
 |---|---|
 | `${VARIABLE}`, `${VARIABLE:-default}`, `${VARIABLE:?message}` | A string parameter named in lowercase with dashes, `variable`, with its default, required with `:?` |
 | A config read from `environment: VARIABLE` | A string parameter, `variable` |
-| A secret read from `environment: VARIABLE` | A credential, `variable`, required on install and upgrade |
+| A secret read from `environment: VARIABLE` | A credential, `variable`, required on install and upgrade, or optional with `x-nemo-credential` |
 | A config with `content:` | Kept in the compose project, filled with the parameters |
 | A config or secret read from `file:` | Refused: a bundle carries no files |
 | Each service's `image`, with `--image` | An entry of `images`, with its digest |
