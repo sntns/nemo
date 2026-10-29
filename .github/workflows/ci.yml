@@ -1,7 +1,9 @@
 name: CI
 
 # Every change reaches main through a pull request that passed it: main
-# runs the release workflow alone.
+# runs the release workflow alone. release-please's pull requests change
+# the changelog and the version only, of code that passed it: their jobs
+# are skipped, which the required checks take as passed.
 on:
   pull_request:
 
@@ -10,6 +12,7 @@ permissions:
 
 jobs:
   lint:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -21,6 +24,7 @@ jobs:
           version: v2.15
 
   test:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,6 +34,7 @@ jobs:
       - run: go test -race ./...
 
   integration:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -41,6 +46,7 @@ jobs:
       - run: make integration
 
   build:
+    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
