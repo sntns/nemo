@@ -123,6 +123,43 @@ func TestBuild_credentialRequiredIf(t *testing.T) {
 	assert.ErrorContains(t, err, "required-if names no parameter")
 }
 
+// x-nemo-bundle declares a parameter that no variable of the documents uses,
+// such as a mode only a credential's required-if reads.
+func TestBuild_declaredParameters(t *testing.T) {
+	t.Parallel()
+	build := func(t *testing.T, parameters string) (cnab.ExtendedBundle, error) {
+		directory := t.TempDir()
+		composeFile := filepath.Join(directory, "compose.yaml")
+		layout := filepath.Join(directory, "web.oci")
+		testimage.Write(t, layout)
+		project := "x-nemo-bundle:\n  name: web\n  version: 1.0.0\n  parameters:\n" + parameters +
+			"services:\n  web:\n    image: web:latest\n    secrets: [mongo-uri]\n" +
+			"secrets:\n  mongo-uri:\n    environment: MONGO_URI\n    x-nemo-credential:\n      required-if: { mongo: managed }\n"
+		require.NoError(t, os.WriteFile(composeFile, []byte(project), 0o644))
+		return Build(context.Background(), BuildRequest{
+			ComposeFiles: []string{composeFile},
+			Images:       map[string]string{"web:latest": "oci:" + layout},
+			Installer:    "gill:dev",
+		})
+	}
+
+	built, err := build(t, "    mongo:\n      description: Where the MongoDB is\n      default: runtime\n      enum: [runtime, managed]\n")
+	require.NoError(t, err)
+	require.Contains(t, built.Parameters, "mongo")
+	assert.Equal(t, "MONGO", built.Parameters["mongo"].Destination.EnvironmentVariable)
+	assert.Equal(t, "runtime", built.Definitions["mongo"].Default)
+	assert.Equal(t, []any{"runtime", "managed"}, built.Definitions["mongo"].Enum)
+	assert.Equal(t, "Where the MongoDB is", built.Definitions["mongo"].Description)
+	assert.False(t, built.Credentials["mongo-uri"].Required, "optional to the runtime, required by gill when mongo is managed")
+
+	_, err = build(t, "    mongo:\n      default: managd\n      enum: [runtime, managed]\n")
+	assert.ErrorContains(t, err, `x-nemo-bundle.parameters.mongo: the default "managd" is not one of runtime, managed`)
+	_, err = build(t, "    Mongo_Mode: {}\n    mongo: {}\n")
+	assert.ErrorContains(t, err, "x-nemo-bundle.parameters.Mongo_Mode: a parameter is lowercase words joined by -")
+	_, err = build(t, "    nemo-target: {}\n    mongo: {}\n")
+	assert.ErrorContains(t, err, "x-nemo-bundle.parameters.nemo-target: the nemo-* parameters are nemo's")
+}
+
 // The build knows no value of the variables: a typed field that needs one is valid whatever it
 // will be, and one whose variable has a default is checked with it.
 func TestBuild_variablesInTypedFields(t *testing.T) {

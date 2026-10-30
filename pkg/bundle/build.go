@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -40,7 +41,21 @@ type Metadata struct {
 	// Dependencies are the bundles this one needs, as io.cnab.dependencies
 	// declares them: each a REGISTRY/NAME reference with version ranges.
 	Dependencies *cnab.Dependencies `json:"dependencies,omitempty"`
+	// Parameters are the parameters the bundle declares besides the
+	// variables of its documents: a mode that only a credential's
+	// required-if reads, say.
+	Parameters map[string]DeclaredParameter `json:"parameters,omitempty"`
 }
+
+// DeclaredParameter is a string parameter x-nemo-bundle declares, which the
+// installer gets in the variable of its name: mongo is MONGO.
+type DeclaredParameter struct {
+	Description string   `json:"description,omitempty"`
+	Default     string   `json:"default,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+}
+
+var declaredName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
 // BuildRequest builds a bundle from compose files.
 type BuildRequest struct {
@@ -126,7 +141,7 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("loading the compose project: %w", err)
 	}
-	variablesErr := declareVariables(&built, documents, project)
+	variablesErr := declareVariables(&built, documents, project, metadata.Parameters)
 	images, imagesErr := resolveImages(ctx, project, request.Images)
 	if err := errors.Join(variablesErr, imagesErr); err != nil {
 		return cnab.ExtendedBundle{}, err
@@ -220,11 +235,37 @@ func readCompose(files []string) ([]cnab.ComposeDocument, Metadata, error) {
 	return documents, metadata, nil
 }
 
-// declareVariables declares a string parameter for each ${VARIABLE} of the
-// documents, and for each config read from a variable; and a credential
-// for each secret read from a variable. The installer interpolates the
-// documents with the parameters, and reads configs and secrets from both.
-func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project) error {
+// declareVariables declares the parameters of x-nemo-bundle, a string
+// parameter for each ${VARIABLE} of the documents that is not one of them,
+// and for each config read from a variable; and a credential for each secret
+// read from a variable. The installer interpolates the documents with the
+// parameters, and reads configs and secrets from both.
+func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project, parameters map[string]DeclaredParameter) error {
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(parameters)) {
+		declared := parameters[name]
+		switch {
+		case !declaredName.MatchString(name):
+			errs = append(errs, fmt.Errorf("%s.parameters.%s: a parameter is lowercase words joined by -", Extension, name))
+			continue
+		case strings.HasPrefix(name, "nemo-"):
+			errs = append(errs, fmt.Errorf("%s.parameters.%s: the nemo-* parameters are nemo's", Extension, name))
+			continue
+		case len(declared.Enum) > 0 && declared.Default != "" && !slices.Contains(declared.Enum, declared.Default):
+			errs = append(errs, fmt.Errorf("%s.parameters.%s: the default %q is not one of %s", Extension, name, declared.Default, strings.Join(declared.Enum, ", ")))
+			continue
+		}
+		schema := &definition.Schema{Type: "string", Description: declared.Description}
+		if declared.Default != "" {
+			schema.Default = declared.Default
+		}
+		for _, value := range declared.Enum {
+			schema.Enum = append(schema.Enum, value)
+		}
+		built.Definitions[name] = schema
+		built.Parameters[name] = bundle.Parameter{Definition: name, Destination: &bundle.Location{EnvironmentVariable: strings.ToUpper(strings.ReplaceAll(name, "-", "_"))}}
+	}
+
 	declare := func(variable string, value template.Variable) error {
 		name := parameterName(variable)
 		if strings.HasPrefix(name, "nemo-") {
@@ -246,12 +287,11 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		variables := template.ExtractVariables(document.Config, template.DefaultPattern)
 		for _, variable := range slices.Sorted(maps.Keys(variables)) {
 			if err := declare(variable, variables[variable]); err != nil {
-				return err
+				return errors.Join(append(errs, err)...)
 			}
 		}
 	}
 
-	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(project.Configs)) {
 		config := project.Configs[key]
 		switch {

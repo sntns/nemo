@@ -110,6 +110,33 @@ secrets:
 
 With `tls: acme` and `dns-token` given, the proxy gets `dns-token` and not `certificate`, which the stack does not give: a secret whose credential is neither given nor required is left out of the services. With `tls: acme` and no `dns-token`, the install stops: `the credential dns-token is required when dns-auth is token and tls is acme`. CNAB has no such condition: to a CNAB runtime, Porter's as nemo's, the credential is optional, and gill checks the condition at the start of the install or upgrade.
 
+A mode the compose files do not use otherwise is declared in `x-nemo-bundle`. Here the services read their database's URI from a secret only when it is managed elsewhere:
+
+```yaml
+x-nemo-bundle:
+  name: shop
+  parameters:
+    mongo:
+      description: Where the MongoDB is
+      default: runtime
+      enum: [runtime, managed]
+
+services:
+  api:
+    image: shop-api:latest
+    environment:
+      MONGO_URI_FILE: /run/secrets/mongo-uri
+    secrets: [mongo-uri]
+
+secrets:
+  mongo-uri:
+    environment: MONGO_URI
+    x-nemo-credential:
+      required-if: { mongo: managed }
+```
+
+A stack that sets `mongo: managed` must give `mongo-uri`; by default the secret is left out, and the API keeps the database its image knows.
+
 **A bundle carries no files.** A config or secret read from a `file:` is refused at build time: the file would not exist on the target. Use `content:` for a config written in the compose file, or `environment:` to fill it from a parameter or a credential.
 
 ## Volumes get a type
