@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/sntns/nemo/compare/v0.7.0...v0.8.0) (2026-10-30)
+
+
+### Features
+
+* require a secret's credential on the bundle's parameters, with x-nemo-credential ([c99ad42](https://github.com/sntns/nemo/commit/c99ad42e9256fee173f0d70cff3e4b667e6d1271))
+
+
+### Bug Fixes
+
+* build a config whose content needs a parameter without a default ([cef6a29](https://github.com/sntns/nemo/commit/cef6a297ffb5c759ecb9b02512df8af2834cc4c1))
+
 ## [0.7.0](https://github.com/sntns/nemo/compare/v0.6.0...v0.7.0) (2026-10-29)
 
 
