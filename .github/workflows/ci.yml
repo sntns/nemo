@@ -1,18 +1,51 @@
 name: CI
 
-# Every change reaches main through a pull request that passed it: main
-# runs the release workflow alone. release-please's pull requests change
-# the changelog and the version only, of code that passed it: their jobs
-# are skipped, which the required checks take as passed.
+# Every branch is checked on each push; main takes them through pull requests
+# whose CI passed, and runs the release workflow alone. The stages run one after
+# the other, each only once the previous one passed, and only when the push
+# changes code: the CI job alone is required, and it passes when they all
+# passed, or when nothing was to check.
 on:
-  pull_request:
+  push:
+    branches-ignore: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  lint:
-    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
+  changes:
+    name: Changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      # release-please's branches change the changelog and the version only,
+      # of code that passed; the documentation does not change code, apart
+      # from the reference of the commands, which the code generates.
+      - id: diff
+        run: |
+          if [[ "$GITHUB_REF_NAME" == release-please--* ]]; then
+            echo code=false >> "$GITHUB_OUTPUT"
+          elif base=$(git merge-base origin/main HEAD) &&
+            git diff --quiet "$base" HEAD -- . ':!*.md' ':!docs/**' &&
+            git diff --quiet "$base" HEAD -- docs/reference; then
+            echo code=false >> "$GITHUB_OUTPUT"
+          else
+            echo code=true >> "$GITHUB_OUTPUT"
+          fi
+
+  check:
+    name: Check
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,31 +55,15 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15
-
-  test:
-    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
       - run: go test -race ./...
-
-  integration:
-    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-      - uses: docker/setup-buildx-action@v4
-      - run: docker swarm init
-      - run: make integration
+      - name: Check that the reference of the commands is up to date
+        run: |
+          make reference
+          git diff --exit-code docs/reference/cli || (echo "::error::run make reference and commit docs/reference/cli" && exit 1)
 
   build:
-    if: ${{ !startsWith(github.head_ref, 'release-please--') }}
+    name: Build
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -58,10 +75,6 @@ jobs:
         with:
           version: "~> v2"
           args: build --snapshot --clean
-      - name: Check that the reference of the commands is up to date
-        run: |
-          make reference
-          git diff --exit-code docs/reference/cli || (echo "::error::run make reference and commit docs/reference/cli" && exit 1)
       - uses: docker/setup-buildx-action@v4
       - name: Build gill
         uses: docker/build-push-action@v7
@@ -72,3 +85,32 @@ jobs:
           provenance: false
           cache-from: type=gha
           push: false
+
+  integration:
+    name: Integration
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@v4
+      - run: docker swarm init
+      - run: make integration
+
+  ci:
+    name: CI
+    needs: [changes, check, build, integration]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every stage passed, or there was no code to check
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          CODE: ${{ needs.changes.outputs.code }}
+        run: |
+          echo "$NEEDS" | jq -e --arg code "$CODE" '
+            .changes.result == "success" and
+            ([.check.result, .build.result, .integration.result] | all(. == "success" or ($code == "false" and . == "skipped")))
+          ' > /dev/null || { echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'; exit 1; }
