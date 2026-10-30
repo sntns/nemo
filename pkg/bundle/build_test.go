@@ -93,6 +93,36 @@ func TestBuild_refusals(t *testing.T) {
 	assert.Contains(t, err.Error(), "secrets.file: a bundle carries no files")
 }
 
+// A credential that x-nemo-credential requires on parameters is optional to
+// a CNAB runtime: gill requires it. Its parameters must be the bundle's.
+func TestBuild_credentialRequiredIf(t *testing.T) {
+	t.Parallel()
+	build := func(t *testing.T, requiredIf string) (cnab.ExtendedBundle, error) {
+		directory := t.TempDir()
+		composeFile := filepath.Join(directory, "compose.yaml")
+		layout := filepath.Join(directory, "web.oci")
+		testimage.Write(t, layout)
+		project := "x-nemo-bundle:\n  name: web\n  version: 1.0.0\nservices:\n  web:\n    image: web:latest\n    environment:\n      MODE: ${TLS:-certificate}\n    secrets: [certificate, token]\n" +
+			"secrets:\n  certificate:\n    environment: CERTIFICATE\n    x-nemo-credential:\n      required-if: " + requiredIf + "\n  token:\n    environment: TOKEN\n"
+		require.NoError(t, os.WriteFile(composeFile, []byte(project), 0o644))
+		return Build(context.Background(), BuildRequest{
+			ComposeFiles: []string{composeFile},
+			Images:       map[string]string{"web:latest": "oci:" + layout},
+			Installer:    "gill:dev",
+		})
+	}
+
+	built, err := build(t, "{ tls: certificate }")
+	require.NoError(t, err)
+	assert.False(t, built.Credentials["certificate"].Required, "optional to the runtime")
+	assert.True(t, built.Credentials["token"].Required, "a credential without x-nemo-credential is required")
+
+	_, err = build(t, "{ mode: certificate }")
+	assert.ErrorContains(t, err, "secrets.certificate: x-nemo-credential: required-if: the bundle has no parameter mode")
+	_, err = build(t, "{}")
+	assert.ErrorContains(t, err, "required-if names no parameter")
+}
+
 // The build knows no value of the variables: a typed field that needs one is valid whatever it
 // will be, and one whose variable has a default is checked with it.
 func TestBuild_variablesInTypedFields(t *testing.T) {
@@ -119,6 +149,10 @@ func TestBuild_variablesInTypedFields(t *testing.T) {
 	t.Run("a valid default", func(t *testing.T) {
 		t.Parallel()
 		require.NoError(t, build(t, "    ports: [\"${WEB_PORT:-8080}:80\"]\n"))
+	})
+	t.Run("a config's content", func(t *testing.T) {
+		t.Parallel()
+		require.NoError(t, build(t, "    configs: [page]\nconfigs:\n  page:\n    content: 'served by ${HOST}'\n"))
 	})
 	t.Run("an invalid default", func(t *testing.T) {
 		t.Parallel()

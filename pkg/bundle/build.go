@@ -21,6 +21,7 @@ import (
 
 	"github.com/sntns/nemo/internal/decode"
 	"github.com/sntns/nemo/pkg/cnab"
+	"github.com/sntns/nemo/pkg/installer"
 	"github.com/sntns/nemo/pkg/transfer"
 )
 
@@ -137,7 +138,8 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 // buildable returns the documents as the build loads them, knowing no value of the variables yet. A
 // value that needs a variable without a default is left out: whatever it will be, it is checked
 // when the bundle runs. A value whose variables all have a default is checked with them. An image
-// keeps its variables, escaped: the build resolves it as written.
+// keeps its variables, escaped: the build resolves it as written; so does a config's content, which
+// has no type to check and can't be left out.
 func buildable(documents []cnab.ComposeDocument) []cnab.ComposeDocument {
 	result := make([]cnab.ComposeDocument, len(documents))
 	for i, document := range documents {
@@ -168,7 +170,7 @@ func withoutUnknowns(value any, path []string) any {
 		}
 		return copied
 	case string:
-		if len(path) == 3 && path[0] == "services" && path[2] == "image" {
+		if len(path) == 3 && (path[0] == "services" && path[2] == "image" || path[0] == "configs" && path[2] == "content") {
 			return strings.ReplaceAll(value, "$", "$$")
 		}
 		for _, variable := range template.ExtractVariables(map[string]any{"value": value}, template.DefaultPattern) {
@@ -265,9 +267,22 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		case secret.File != "":
 			errs = append(errs, fmt.Errorf("secrets.%s: a bundle carries no files: use environment, filled by a credential", key))
 		case secret.Environment != "":
+			claim, err := installer.CredentialClaimOf(secret.Extensions)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("secrets.%s: %w", key, err))
+				continue
+			}
+			// CNAB has no condition: a credential gill requires on its parameters is optional to the runtime.
+			if claim != nil {
+				for _, name := range slices.Sorted(maps.Keys(claim.RequiredIf)) {
+					if _, declared := built.Parameters[name]; !declared {
+						errs = append(errs, fmt.Errorf("secrets.%s: %s: required-if: the bundle has no parameter %s", key, installer.CredentialExtension, name))
+					}
+				}
+			}
 			built.Credentials[parameterName(secret.Environment)] = bundle.Credential{
 				Location: bundle.Location{EnvironmentVariable: secret.Environment},
-				Required: true,
+				Required: claim == nil,
 				ApplyTo:  []string{cnab.ActionInstall, cnab.ActionUpgrade},
 			}
 		}
