@@ -140,6 +140,24 @@ There is no server and no agent: nemo keeps its records on the machine it runs o
 
 Each one is described in [use cases](docs/use-cases.md).
 
+## Terraform and OpenTofu
+
+The [nemo provider](https://github.com/sntns/terraform-provider-nemo), `sntns/nemo` on the [Terraform Registry](https://registry.terraform.io/providers/sntns/nemo) and the [OpenTofu Registry](https://search.opentofu.org/provider/sntns/nemo), deploys a stack from Terraform or OpenTofu: a `nemo_stack` is its manifest, and each apply is a `nemo up`.
+
+```hcl
+resource "nemo_stack" "shop" {
+  name   = "shop"
+  remote = "docker://registry.example.com/shop/{{ .Component }}:{{ .Version }}"
+  target = { orchestrator = "swarm", host = "ssh://deploy@prod-1.example.com" }
+  installations = [
+    { name = "api", version = "1.4.0" },
+    { name = "frontend", version = "1.4.0" },
+  ]
+}
+```
+
+The provider keeps the stack's records on its target: `nemo status` and `nemo logs` read it from any machine that imported the stack's manifest.
+
 ## Documentation
 
 | | |
@@ -164,5 +182,7 @@ Bug reports, ideas and pull requests are welcome: read [CONTRIBUTING.md](CONTRIB
 ## License
 
 nemo is licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Sentiens SAS.
+
+nemo is made and maintained by [Sentiens](https://www.sentiens.fr) ([LinkedIn](https://www.linkedin.com/company/sntns)), by [@ttnlmn](https://github.com/ttnlmn).
 
 The nemo logo is derived from the Go gopher, designed by [Renée French](https://reneefrench.blogspot.com/) and licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See [docs/assets](docs/assets/README.md).
