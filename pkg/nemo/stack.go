@@ -256,12 +256,13 @@ func (plan *upPlan) actionRequest(bundle cnab.ExtendedBundle, events progress.Si
 	spec.Parameters = parameters
 	spec.Credentials = credentials.Merge(bundle, plan.stack.Credentials, entry.spec.Credentials)
 	return ActionRequest{
-		InstallationSpec: spec,
-		BundleSource:     entry.source,
-		Target:           plan.stack.Target,
-		Installer:        plan.stack.Installer,
-		Progress:         events,
-		Validate:         validate,
+		InstallationSpec:  spec,
+		BundleSource:      entry.source,
+		Target:            plan.stack.Target,
+		Installer:         plan.stack.Installer,
+		Progress:          events,
+		Validate:          validate,
+		ReplaceParameters: true,
 	}
 }
 
