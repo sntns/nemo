@@ -4,6 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       go:
         patterns: ["*"]
@@ -11,6 +13,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -18,3 +22,5 @@ updates:
     directory: /build/gill
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
