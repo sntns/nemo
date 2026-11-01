@@ -62,7 +62,23 @@ shop · swarm · 4 installations
 brew install sntns/tap/nemo
 ```
 
+**Linux packages**, `deb`, `rpm` and `apk`, for amd64 and arm64:
+
+```bash
+gh release download -R sntns/nemo -p 'nemo_*_amd64.deb'
+sudo apt install ./nemo_*_amd64.deb
+```
+
 **Binaries** for Linux, macOS and Windows, amd64 and arm64, are attached to every [release](https://github.com/sntns/nemo/releases/latest).
+
+**Verify** what you downloaded, against its provenance or the signed checksums:
+
+```bash
+gh attestation verify nemo_*_linux_amd64.tar.gz -R sntns/nemo
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/sntns/nemo/.github/workflows/release.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 **From source**, with Go 1.26 or later:
 

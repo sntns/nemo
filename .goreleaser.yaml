@@ -1,4 +1,4 @@
-# nemo's binaries, archives and Homebrew formula, for each release that
+# nemo's binaries, archives, packages and Homebrew formula, for each release that
 # release-please creates. gill's image is built by the release workflow.
 version: 2
 
@@ -29,6 +29,31 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+# deb, rpm and apk packages of the Linux binaries, attached to the release.
+nfpms:
+  - id: nemo
+    package_name: nemo
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Sentiens
+    homepage: https://github.com/sntns/nemo
+    maintainer: Sentiens <security@sentiens.fr>
+    description: Deploy applications of containers onto Docker, with Compose or Swarm, as CNAB bundles
+    license: Apache-2.0
+    formats: [deb, rpm, apk]
+    bindir: /usr/bin
+
+# An SPDX SBOM of each archive.
+sboms:
+  - artifacts: archive
+
+# The checksums signed by Sigstore, keyless: the bundle holds the signature
+# and the certificate of the release workflow's identity.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
 
 # release-please writes the notes and creates the release; the archives are
 # added to it.
