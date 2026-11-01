@@ -64,7 +64,7 @@ To try a change end to end, build and deploy the [examples](examples/README.md) 
 `main` takes changes through pull requests only. CI runs on every pull request, on `main` and once a week:
 
 - the quick checks, side by side: the linter, the tests with a check that `docs/reference/cli` is up to date, `govulncheck`, and `zizmor` on the workflows;
-- once they pass, side by side: a GoReleaser snapshot of every released platform and package, a build of gill's image, and the integration bench on a swarm.
+- once they pass, side by side: Binaries, a GoReleaser snapshot of every released platform and package; Gill image, built for both its platforms; and Integration, the bench on a swarm.
 
 The `CI` check sums them up, and a pull request can't be merged until it passes. The label `ci/validate-only` keeps a pull request to the quick checks, for a change to the docs or the workflows alone. CodeQL analyses every pull request too. The workflows pin each action by its commit, and Dependabot proposes their updates.
 

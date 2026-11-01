@@ -1,8 +1,8 @@
 name: CI
 
 # Pull requests, main and a weekly run, as most Go projects do. The quick
-# checks run side by side; the builds and the integration bench start once
-# they passed, side by side too. The label ci/validate-only keeps a pull
+# checks run side by side; nemo's binaries and packages, gill's image and
+# the integration bench start once they passed, side by side too. The label ci/validate-only keeps a pull
 # request to the quick checks. The CI job alone is required.
 on:
   pull_request:
@@ -70,8 +70,8 @@ jobs:
         with:
           advanced-security: false
 
-  build:
-    name: Build
+  binaries:
+    name: Binaries
     needs: [lint, test, govulncheck, workflows]
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     runs-on: ubuntu-latest
@@ -89,8 +89,8 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=sign,sbom,publish
 
-  gill:
-    name: Gill
+  image:
+    name: Gill image
     needs: [lint, test, govulncheck, workflows]
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     runs-on: ubuntu-latest
@@ -126,7 +126,7 @@ jobs:
 
   ci:
     name: CI
-    needs: [lint, test, govulncheck, workflows, build, gill, integration]
+    needs: [lint, test, govulncheck, workflows, binaries, image, integration]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
