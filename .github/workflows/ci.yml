@@ -1,9 +1,9 @@
 name: CI
 
-# Pull requests, main and a weekly run, as most Go projects do. The quick
-# checks run side by side; nemo's binaries and packages, gill's image and
-# the integration bench start once they passed, side by side too. The label ci/validate-only keeps a pull
-# request to the quick checks. The CI job alone is required.
+# Pull requests, main and a weekly run, in three stages, each once the
+# previous one passed: the static checks, then the tests, then what a release
+# publishes. The label ci/validate-only keeps a pull request to the static
+# checks. The CI job alone is required.
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
@@ -35,8 +35,8 @@ jobs:
         with:
           version: v2.15
 
-  test:
-    name: Test
+  reference:
+    name: Reference
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,7 +45,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - run: go test -race ./...
       - name: Check that the reference of the commands is up to date
         run: |
           make reference
@@ -70,10 +69,39 @@ jobs:
         with:
           advanced-security: false
 
+  test:
+    name: Unit tests
+    needs: [lint, reference, govulncheck, workflows]
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  integration:
+    name: Integration tests
+    needs: [lint, reference, govulncheck, workflows]
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - run: docker swarm init
+      - run: make integration
+
   binaries:
     name: Binaries
-    needs: [lint, test, govulncheck, workflows]
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
+    needs: [test, integration]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,44 +117,29 @@ jobs:
           version: "~> v2"
           args: release --snapshot --clean --skip=sign,sbom,publish
 
+  # One build per platform on its own runner, then a job that assembles the
+  # image: Docker's reusable workflow, as moby and buildx build theirs. The
+  # release runs the same one, pushing and signing.
   image:
     name: Gill image
-    needs: [lint, test, govulncheck, workflows]
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - name: Build gill for every platform it is released for
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: build/gill/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          cache-from: type=gha
-          push: false
-
-  integration:
-    name: Integration
-    needs: [lint, test, govulncheck, workflows]
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      - run: docker swarm init
-      - run: make integration
+    needs: [test, integration]
+    uses: docker/github-builder/.github/workflows/build.yml@cbc9d42f8c89a55623392aadd03600965b80e963 # v1.18.1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      output: image
+      push: false
+      context: .
+      file: build/gill/Dockerfile
+      platforms: linux/amd64,linux/arm64
+      cache: true
+      cache-scope: gill
+      meta-images: ghcr.io/sntns/gill
 
   ci:
     name: CI
-    needs: [lint, test, govulncheck, workflows, binaries, image, integration]
+    needs: [lint, reference, govulncheck, workflows, test, integration, binaries, image]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
