@@ -109,6 +109,26 @@ func TestUpAndDown(t *testing.T) {
 	assert.Empty(t, result.Runs)
 }
 
+func TestUpDropsTheParametersTheStackNoLongerGives(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	demo := stack.Stack{
+		Name:          "demo",
+		Target:        target.Target{Orchestrator: target.Compose},
+		Parameters:    map[string]string{"region": "eu5"},
+		Installations: []storage.InstallationSpec{{Name: "web", Bundle: storage.BundleReference{File: writeBundle(t, filepath.Dir(bundleFile), "web")}}},
+	}
+	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+
+	demo.Parameters = nil
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, "upgrade", fake.last().Action)
+	assert.NotContains(t, fake.last().Parameters, "region", "back to the bundle's default, not the recorded eu5")
+}
+
 func TestDownDependantsFirst(t *testing.T) {
 	t.Parallel()
 	nemo, fake, bundleFile, _ := setup(t)

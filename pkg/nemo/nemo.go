@@ -95,6 +95,10 @@ type ActionRequest struct {
 	// Validate runs the bundle's validate action instead, with what the
 	// action would run with: nothing changes, and nothing is recorded.
 	Validate bool
+	// ReplaceParameters makes the request's parameters all the
+	// installation's: one it leaves out goes back to the bundle's default,
+	// instead of keeping its recorded value. A stack's actions set it.
+	ReplaceParameters bool
 }
 
 // Run is the record of an action: what was asked, and what came of it.
@@ -376,7 +380,9 @@ func (plan *actionPlan) goOnFrom(stored storage.Installation, request ActionRequ
 	if request.Installer.Driver == "" && request.Installer.Kubernetes == nil {
 		plan.installer = stored.Installer
 	}
-	plan.parameters = declared(plan.bundle.Parameters, stored.Parameters, request.Parameters)
+	if !request.ReplaceParameters {
+		plan.parameters = declared(plan.bundle.Parameters, stored.Parameters, request.Parameters)
+	}
 	plan.credentials = credentials.Merge(plan.bundle, stored.Credentials, request.Credentials)
 	return nil
 }

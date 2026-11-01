@@ -71,6 +71,8 @@ A bundle declares its parameters; the stack gives them values. The stack's `para
 
 So one `domain` parameter at the stack level reaches every bundle that needs a domain, and only those.
 
+The manifest gives each installation all its parameters, at every `nemo up`: a parameter the manifest no longer gives goes back to the bundle's default, rather than keeping the value of the last run. `nemo installation upgrade` alone keeps the parameters it is not given.
+
 ## Credentials
 
 Credentials are given by their **source**, never by their value. nemo reads the value when an action runs, hands it to gill for that action only, and keeps only the source.
