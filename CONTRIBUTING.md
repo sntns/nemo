@@ -65,7 +65,7 @@ To try a change end to end, build and deploy the [examples](examples/README.md) 
 
 1. the static checks, side by side: Lint, Reference (`docs/reference/cli` up to date), Vulnerabilities (`govulncheck`) and Workflows (`zizmor`);
 2. the tests, side by side: Unit tests, and Integration tests, the bench on a swarm;
-3. what a release publishes, side by side: Binaries, a GoReleaser snapshot of every platform and package; and Image, gill's, built by Docker's reusable workflow, [docker/github-builder](https://github.com/docker/github-builder), one platform per runner, then assembled.
+3. what a release publishes, side by side: Binaries, a GoReleaser snapshot of every platform and package; and Gill image, built by Docker's reusable workflow, [docker/github-builder](https://github.com/docker/github-builder), one platform per runner, then assembled.
 
 The `CI` check sums them up, and a pull request can't be merged until it passes. The label `ci/validate-only` keeps a pull request to the static checks, for a change to the docs or the workflows alone. CodeQL analyses every pull request too. The workflows pin each action by its commit, and Dependabot proposes their updates.
 

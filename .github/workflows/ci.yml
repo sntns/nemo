@@ -121,7 +121,7 @@ jobs:
   # image: Docker's reusable workflow, as moby and buildx build theirs. The
   # release runs the same one, pushing and signing.
   image:
-    name: Image
+    name: Gill image
     needs: [test, integration]
     uses: docker/github-builder/.github/workflows/build.yml@cbc9d42f8c89a55623392aadd03600965b80e963 # v1.18.1
     permissions:
