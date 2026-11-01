@@ -1,116 +1,136 @@
 name: CI
 
-# Every branch is checked on each push; main takes them through pull requests
-# whose CI passed, and runs the release workflow alone. The stages run one after
-# the other, each only once the previous one passed, and only when the push
-# changes code: the CI job alone is required, and it passes when they all
-# passed, or when nothing was to check.
+# Pull requests, main and a weekly run, as most Go projects do. The quick
+# checks run side by side; the builds and the integration bench start once
+# they passed, side by side too. The label ci/validate-only keeps a pull
+# request to the quick checks. The CI job alone is required.
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
-    branches-ignore: [main]
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  changes:
-    name: Changes
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.diff.outputs.code }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-      # release-please's branches change the changelog and the version only,
-      # of code that passed; the documentation does not change code, apart
-      # from the reference of the commands, which the code generates.
-      - id: diff
-        run: |
-          if [[ "$GITHUB_REF_NAME" == release-please--* ]]; then
-            echo code=false >> "$GITHUB_OUTPUT"
-          elif base=$(git merge-base origin/main HEAD) &&
-            git diff --quiet "$base" HEAD -- . ':!*.md' ':!docs/**' &&
-            git diff --quiet "$base" HEAD -- docs/reference; then
-            echo code=false >> "$GITHUB_OUTPUT"
-          else
-            echo code=true >> "$GITHUB_OUTPUT"
-          fi
-
-  check:
-    name: Check
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.15
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
       - run: go test -race ./...
       - name: Check that the reference of the commands is up to date
         run: |
           make reference
           git diff --exit-code docs/reference/cli || (echo "::error::run make reference and commit docs/reference/cli" && exit 1)
 
-  build:
-    name: Build
-    needs: check
+  govulncheck:
+    name: Vulnerabilities
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
           go-version-file: go.mod
-      - name: Build nemo for every platform it is released for
-        uses: goreleaser/goreleaser-action@v7
+
+  workflows:
+    name: Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+
+  build:
+    name: Build
+    needs: [lint, test, govulncheck, workflows]
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build nemo and its packages for every platform it is released for
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2"
-          args: build --snapshot --clean
-      - uses: docker/setup-buildx-action@v4
-      - name: Build gill
-        uses: docker/build-push-action@v7
+          args: release --snapshot --clean --skip=sign,sbom,publish
+
+  gill:
+    name: Gill
+    needs: [lint, test, govulncheck, workflows]
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build gill for every platform it is released for
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: build/gill/Dockerfile
           platforms: linux/amd64,linux/arm64
-          provenance: false
           cache-from: type=gha
           push: false
 
   integration:
     name: Integration
-    needs: build
+    needs: [lint, test, govulncheck, workflows]
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'ci/validate-only') }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - run: docker swarm init
       - run: make integration
 
   ci:
     name: CI
-    needs: [changes, check, build, integration]
-    if: always()
+    needs: [lint, test, govulncheck, workflows, build, gill, integration]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
-      - name: Every stage passed, or there was no code to check
-        env:
-          NEEDS: ${{ toJSON(needs) }}
-          CODE: ${{ needs.changes.outputs.code }}
-        run: |
-          echo "$NEEDS" | jq -e --arg code "$CODE" '
-            .changes.result == "success" and
-            ([.check.result, .build.result, .integration.result] | all(. == "success" or ($code == "false" and . == "skipped")))
-          ' > /dev/null || { echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'; exit 1; }
+      - name: Every job passed, or was left out by ci/validate-only
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: exit 1
+      - run: echo "CI passed"

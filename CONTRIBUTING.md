@@ -61,7 +61,12 @@ export NEMO_INSTALLER=oci:$PWD/bin/gill.oci
 
 To try a change end to end, build and deploy the [examples](examples/README.md) on your local Docker.
 
-`main` takes changes through pull requests only. CI runs the linter, the tests, a build of every released platform, a check that `docs/reference/cli` is up to date, and a build of gill's image on every pull request, and a pull request can't be merged until they pass. Once merged, `main` runs the release workflow alone.
+`main` takes changes through pull requests only. CI runs on every pull request, on `main` and once a week:
+
+- the quick checks, side by side: the linter, the tests with a check that `docs/reference/cli` is up to date, `govulncheck`, and `zizmor` on the workflows;
+- once they pass, side by side: a GoReleaser snapshot of every released platform and package, a build of gill's image, and the integration bench on a swarm.
+
+The `CI` check sums them up, and a pull request can't be merged until it passes. The label `ci/validate-only` keeps a pull request to the quick checks, for a change to the docs or the workflows alone. CodeQL analyses every pull request too. The workflows pin each action by its commit, and Dependabot proposes their updates.
 
 ## Commit messages
 
@@ -71,8 +76,9 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org): `fea
 
 Releases are made by [release-please](https://github.com/googleapis/release-please): it keeps a release pull request up to date with the changes merged on `main`. Merging it tags the version, creates the GitHub release with its changelog, and then:
 
-- [GoReleaser](https://goreleaser.com) builds `nemo` for Linux, macOS and Windows on amd64 and arm64, attaches the archives and their checksums to the release, and updates the formula in [sntns/homebrew-tap](https://github.com/sntns/homebrew-tap);
-- gill's image is built for linux/amd64 and linux/arm64 and pushed to `ghcr.io/sntns/gill` with the same version.
+- [GoReleaser](https://goreleaser.com) builds `nemo` for Linux, macOS and Windows on amd64 and arm64, and attaches to the release the archives, the `deb`, `rpm` and `apk` packages, an SPDX SBOM of each archive, and the checksums signed by Sigstore, keyless. It updates the formula in [sntns/homebrew-tap](https://github.com/sntns/homebrew-tap);
+- gill's image is built for linux/amd64 and linux/arm64, with its provenance and its SBOM, signed by Sigstore and pushed to `ghcr.io/sntns/gill` with the same version;
+- every artifact gets a provenance attestation from GitHub.
 
 A released `nemo` builds bundles with the gill of its own version, so both are always published together.
 
