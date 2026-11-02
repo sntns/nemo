@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0](https://github.com/sntns/nemo/compare/v0.10.0...v0.11.0) (2026-11-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* drop x-nemo-credential and the parameters of x-nemo-bundle
+
+### Features
+
+* drop x-nemo-credential and the parameters of x-nemo-bundle ([cae2e69](https://github.com/sntns/nemo/commit/cae2e69c7398dc8ec1a42d390d3dc893b76ff2ce))
+* let a stack override a bundle's compose, per installation ([3ea92a7](https://github.com/sntns/nemo/commit/3ea92a73d30570b55e3d72467894ecb075c75741))
+
 ## [0.10.0](https://github.com/sntns/nemo/compare/v0.9.0...v0.10.0) (2026-11-02)
 
 
