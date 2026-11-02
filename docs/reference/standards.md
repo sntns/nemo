@@ -22,7 +22,7 @@ Bundles and their images are stored as OCI artifacts, the way CNAB tools store t
 
 ## Running nemo bundles with other CNAB tools
 
-A nemo bundle declares everything gill needs as standard CNAB parameters and credentials, so it is designed to run with any CNAB runtime that honours the `io.cnab.docker` extension. Such a runtime must mount the target's Docker socket into gill (with [Porter](https://porter.sh), `--allow-docker-host-access`), and give the `nemo-orchestrator` parameter.
+A nemo bundle declares everything gill needs as standard CNAB parameters and credentials, so it runs with any CNAB runtime that honours the `io.cnab.docker` extension. Such a runtime must mount the target's Docker socket into gill and give the `nemo-orchestrator` parameter. [Porter](https://porter.sh) 1.6 does, with `--allow-docker-host-access`: it installs, upgrades and uninstalls nemo bundles on Compose and on Swarm, from a `bundle.json` or from a registry, where it finds gill and the images by digest in the bundle's repository. The [bundles guide](../guides/bundles.md#with-another-cnab-tool) says what it needs.
 
 What such a runtime does not do is what nemo adds around bundles: stacks and their dependencies, loading images without a registry, volume types from the target, progress, status and logs.
 
