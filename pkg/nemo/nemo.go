@@ -196,8 +196,20 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		}
 		action = cnab.ActionValidate
 	}
-	values, err := credentials.Resolve(plan.credentials, plan.bundle, action)
+	override := plan.parameters[cnab.ParameterOverride]
+	if _, declared := plan.bundle.Parameters[cnab.ParameterOverride]; override != "" && !declared {
+		return Run{}, fmt.Errorf("the bundle %s was built by a nemo that can't take an override: build it again", plan.bundle.Name)
+	}
+	extended, err := credentials.WithOverride(plan.bundle, override)
 	if err != nil {
+		return Run{}, err
+	}
+	values, err := credentials.Resolve(plan.credentials, extended, action)
+	if err != nil {
+		return Run{}, err
+	}
+	given := slices.Sorted(maps.Keys(values))
+	if values, err = credentials.Pack(plan.bundle, extended, values); err != nil {
 		return Run{}, err
 	}
 	run, err := nemo.execute(ctx, runtime.Request{
@@ -230,7 +242,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Target:       recordedTarget(plan.target),
 		Driver:       plan.installer.DriverName(),
 		Parameters:   run.Claim.Parameters,
-		Credentials:  slices.Sorted(maps.Keys(values)),
+		Credentials:  given,
 		Status:       run.Result.Status,
 		Started:      run.Claim.Created,
 		Ended:        run.Result.Created,
@@ -383,7 +395,11 @@ func (plan *actionPlan) goOnFrom(stored storage.Installation, request ActionRequ
 	if !request.ReplaceParameters {
 		plan.parameters = declared(plan.bundle.Parameters, stored.Parameters, request.Parameters)
 	}
-	plan.credentials = credentials.Merge(plan.bundle, stored.Credentials, request.Credentials)
+	extended, err := credentials.WithOverride(plan.bundle, plan.parameters[cnab.ParameterOverride])
+	if err != nil {
+		return err
+	}
+	plan.credentials = credentials.Merge(extended, stored.Credentials, request.Credentials)
 	return nil
 }
 

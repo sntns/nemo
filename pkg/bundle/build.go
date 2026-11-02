@@ -10,7 +10,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 
@@ -22,7 +21,6 @@ import (
 
 	"github.com/sntns/nemo/internal/decode"
 	"github.com/sntns/nemo/pkg/cnab"
-	"github.com/sntns/nemo/pkg/installer"
 	"github.com/sntns/nemo/pkg/transfer"
 )
 
@@ -41,21 +39,7 @@ type Metadata struct {
 	// Dependencies are the bundles this one needs, as io.cnab.dependencies
 	// declares them: each a REGISTRY/NAME reference with version ranges.
 	Dependencies *cnab.Dependencies `json:"dependencies,omitempty"`
-	// Parameters are the parameters the bundle declares besides the
-	// variables of its documents: a mode that only a credential's
-	// required-if reads, say.
-	Parameters map[string]DeclaredParameter `json:"parameters,omitempty"`
 }
-
-// DeclaredParameter is a string parameter x-nemo-bundle declares, which the
-// installer gets in the variable of its name: mongo is MONGO.
-type DeclaredParameter struct {
-	Description string   `json:"description,omitempty"`
-	Default     string   `json:"default,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-}
-
-var declaredName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
 // BuildRequest builds a bundle from compose files.
 type BuildRequest struct {
@@ -105,16 +89,18 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	}
 
 	built := bundle.Bundle{
-		SchemaVersion:      bundle.GetDefaultSchemaVersion(),
-		Name:               metadata.Name,
-		Version:            version,
-		Description:        metadata.Description,
-		License:            metadata.License,
-		Keywords:           metadata.Keywords,
-		Maintainers:        metadata.Maintainers,
-		Definitions:        nemoDefinitions(),
-		Parameters:         nemoParameters(),
-		Credentials:        map[string]bundle.Credential{},
+		SchemaVersion: bundle.GetDefaultSchemaVersion(),
+		Name:          metadata.Name,
+		Version:       version,
+		Description:   metadata.Description,
+		License:       metadata.License,
+		Keywords:      metadata.Keywords,
+		Maintainers:   metadata.Maintainers,
+		Definitions:   nemoDefinitions(),
+		Parameters:    nemoParameters(),
+		Credentials: map[string]bundle.Credential{
+			cnab.CredentialOverride: {Location: bundle.Location{EnvironmentVariable: "NEMO_CREDENTIALS"}, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Description: "The secrets the override reads its secrets and configs from, as JSON by variable"},
+		},
 		Actions:            map[string]bundle.Action{cnab.ActionValidate: {Stateless: true, Description: "Check the bundle against the target, and change nothing"}},
 		RequiredExtensions: []string{cnab.DockerExtension.Key},
 	}
@@ -137,11 +123,11 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	built.InvocationImages = []bundle.InvocationImage{{BaseImage: installer}}
 
 	buildTime := cnab.Compose{Documents: buildable(documents)}
-	project, err := buildTime.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), types.Mapping{})
+	project, err := buildTime.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), types.Mapping{}, "")
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("loading the compose project: %w", err)
 	}
-	variablesErr := declareVariables(&built, documents, project, metadata.Parameters)
+	variablesErr := declareVariables(&built, documents, project)
 	images, imagesErr := resolveImages(ctx, project, request.Images)
 	if err := errors.Join(variablesErr, imagesErr); err != nil {
 		return cnab.ExtendedBundle{}, err
@@ -235,37 +221,11 @@ func readCompose(files []string) ([]cnab.ComposeDocument, Metadata, error) {
 	return documents, metadata, nil
 }
 
-// declareVariables declares the parameters of x-nemo-bundle, a string
-// parameter for each ${VARIABLE} of the documents that is not one of them,
-// and for each config read from a variable; and a credential for each secret
-// read from a variable. The installer interpolates the documents with the
-// parameters, and reads configs and secrets from both.
-func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project, parameters map[string]DeclaredParameter) error {
-	var errs []error
-	for _, name := range slices.Sorted(maps.Keys(parameters)) {
-		declared := parameters[name]
-		switch {
-		case !declaredName.MatchString(name):
-			errs = append(errs, fmt.Errorf("%s.parameters.%s: a parameter is lowercase words joined by -", Extension, name))
-			continue
-		case strings.HasPrefix(name, "nemo-"):
-			errs = append(errs, fmt.Errorf("%s.parameters.%s: the nemo-* parameters are nemo's", Extension, name))
-			continue
-		case len(declared.Enum) > 0 && declared.Default != "" && !slices.Contains(declared.Enum, declared.Default):
-			errs = append(errs, fmt.Errorf("%s.parameters.%s: the default %q is not one of %s", Extension, name, declared.Default, strings.Join(declared.Enum, ", ")))
-			continue
-		}
-		schema := &definition.Schema{Type: "string", Description: declared.Description}
-		if declared.Default != "" {
-			schema.Default = declared.Default
-		}
-		for _, value := range declared.Enum {
-			schema.Enum = append(schema.Enum, value)
-		}
-		built.Definitions[name] = schema
-		built.Parameters[name] = bundle.Parameter{Definition: name, Destination: &bundle.Location{EnvironmentVariable: strings.ToUpper(strings.ReplaceAll(name, "-", "_"))}}
-	}
-
+// declareVariables declares a string parameter for each ${VARIABLE} of the
+// documents, and for each config read from a variable; and a credential
+// for each secret read from a variable. The installer interpolates the
+// documents with the parameters, and reads configs and secrets from both.
+func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project) error {
 	declare := func(variable string, value template.Variable) error {
 		name := parameterName(variable)
 		if strings.HasPrefix(name, "nemo-") {
@@ -287,11 +247,12 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		variables := template.ExtractVariables(document.Config, template.DefaultPattern)
 		for _, variable := range slices.Sorted(maps.Keys(variables)) {
 			if err := declare(variable, variables[variable]); err != nil {
-				return errors.Join(append(errs, err)...)
+				return err
 			}
 		}
 	}
 
+	var errs []error
 	for _, key := range slices.Sorted(maps.Keys(project.Configs)) {
 		config := project.Configs[key]
 		switch {
@@ -307,22 +268,9 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		case secret.File != "":
 			errs = append(errs, fmt.Errorf("secrets.%s: a bundle carries no files: use environment, filled by a credential", key))
 		case secret.Environment != "":
-			claim, err := installer.CredentialClaimOf(secret.Extensions)
-			if err != nil {
-				errs = append(errs, fmt.Errorf("secrets.%s: %w", key, err))
-				continue
-			}
-			// CNAB has no condition: a credential gill requires on its parameters is optional to the runtime.
-			if claim != nil {
-				for _, name := range slices.Sorted(maps.Keys(claim.RequiredIf)) {
-					if _, declared := built.Parameters[name]; !declared {
-						errs = append(errs, fmt.Errorf("secrets.%s: %s: required-if: the bundle has no parameter %s", key, installer.CredentialExtension, name))
-					}
-				}
-			}
 			built.Credentials[parameterName(secret.Environment)] = bundle.Credential{
 				Location: bundle.Location{EnvironmentVariable: secret.Environment},
-				Required: claim == nil,
+				Required: true,
 				ApplyTo:  []string{cnab.ActionInstall, cnab.ActionUpgrade},
 			}
 		}
@@ -406,6 +354,7 @@ func nemoDefinitions() definition.Definitions {
 		cnab.ParameterTimeout:      {Type: "string", Default: "5m"},
 		cnab.ParameterPurge:        {Type: "boolean", Default: false},
 		cnab.ParameterVolumes:      {Type: "object"},
+		cnab.ParameterOverride:     {Type: "string"},
 	}
 }
 
@@ -417,5 +366,6 @@ func nemoParameters() map[string]bundle.Parameter {
 		cnab.ParameterPurge:        {Definition: cnab.ParameterPurge, ApplyTo: []string{cnab.ActionUninstall}, Description: "Also remove the volumes", Destination: &bundle.Location{EnvironmentVariable: "NEMO_PURGE"}},
 		cnab.ParameterVolumes:      {Definition: cnab.ParameterVolumes, Description: "The volume types of the target, as JSON", Destination: &bundle.Location{EnvironmentVariable: "NEMO_VOLUMES"}},
 		cnab.ParameterRegistryAuth: {Definition: cnab.ParameterRegistryAuth, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Description: "The credentials of the registries the images are pulled from, as JSON by domain", Destination: &bundle.Location{EnvironmentVariable: "NEMO_REGISTRY_AUTH"}},
+		cnab.ParameterOverride:     {Definition: cnab.ParameterOverride, Description: "A compose document fused into the bundle's, last, as YAML: the override the stack gives the installation", Destination: &bundle.Location{EnvironmentVariable: "NEMO_OVERRIDE"}},
 	}
 }

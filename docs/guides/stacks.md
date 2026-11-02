@@ -97,6 +97,40 @@ nemo stack set --credential database-password=env:SHOP_DATABASE_PASSWORD
 
 A relative `path` is made absolute, from the manifest's directory when imported, from the current directory with `nemo stack set`.
 
+## Overrides
+
+Parameters and credentials give values to what a bundle declares. What differs between environments in shape, not in value, goes in an **override**: a compose document the installation carries in the manifest, which gill fuses into the bundle's compose, last, as `docker compose -f compose.yaml -f override.yaml` does.
+
+Say a `proxy` bundle serves TLS from a default certificate. Production obtains its certificates from an ACME server, by a DNS challenge at its DNS provider:
+
+```yaml
+credentials:
+  - name: dns-provider-secret
+    source: { env: DNS_PROVIDER_SECRET }
+
+installations:
+  - name: proxy
+    bundle: { version: 2.0.0 }
+    override: |
+      services:
+        proxy:
+          environment:
+            ACME_DNS_PROVIDER: example-dns
+            ACME_DNS_PROVIDER_SECRET_FILE: /run/secrets/dns-provider-secret
+          secrets: [dns-provider-secret]
+      secrets:
+        dns-provider-secret:
+          environment: DNS_PROVIDER_SECRET
+```
+
+- **Merging** follows compose: mappings, such as `environment` or `labels`, merge key by key; `command` and `entrypoint` are replaced whole; lists such as `secrets`, `ports` or `volumes` are merged. `!reset` removes what the bundle sets, `!override` replaces it without merging.
+- **What it can't change**: the image of a service, pinned by the bundle, nor add a service, which would need one. gill refuses them, and `nemo up` validates every bundle with its override before it installs the first.
+- **Secrets**: a secret or a config of the override reads its content from a variable, as the bundle's do. A variable that is neither a parameter nor a credential of the bundle comes from the stack's credential of its name in lowercase with dashes, `DNS_PROVIDER_SECRET` from `dns-provider-secret`: nemo gives the bundle that credential, and that one alone. Its value never reaches the service's specification: only its secret file does.
+- **Other values** are written in the override as they are: an override is the stack's, written for its environment.
+- **Records**: the override goes to gill as the `nemo-override` parameter, and is recorded with the run's parameters. Removing it from the manifest takes it off at the next `nemo up`.
+
+An override has the trust of the stack: like the manifest, it decides what runs, ports and mounts included. A bundle built by nemo 0.10 or before can't take one: build it again.
+
 ## Keeping stacks
 
 nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), and one of them is the **current stack**: commands act on it unless given `--stack NAME`. With shell completion (`nemo completion --help`), Tab completes the names of the stacks, of their installations and of their services.

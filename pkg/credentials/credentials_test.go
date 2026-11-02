@@ -66,3 +66,52 @@ func TestResolve(t *testing.T) {
 	merged := Merge(extendedBundle, []valuesource.Strategy{token, {Name: "gone"}}, []valuesource.Strategy{database})
 	assert.Equal(t, []valuesource.Strategy{database, token}, merged, "what the bundle still declares, overridden by what is given")
 }
+
+func TestWithOverrideAndPack(t *testing.T) {
+	t.Parallel()
+	definition := cnab.ExtendedBundle{Bundle: bundle.Bundle{
+		Name:       "gateway",
+		Parameters: map[string]bundle.Parameter{"host": {Destination: &bundle.Location{EnvironmentVariable: "HOST"}}},
+		Credentials: map[string]bundle.Credential{
+			"certificate":           {Location: bundle.Location{EnvironmentVariable: "CERTIFICATE"}},
+			cnab.CredentialOverride: {Location: bundle.Location{EnvironmentVariable: "NEMO_CREDENTIALS"}},
+		},
+	}}
+	override := `
+secrets:
+  acme-secret: { environment: ACME_SECRET }
+  certificate: { environment: CERTIFICATE }
+configs:
+  host: { environment: HOST }
+`
+	extended, err := WithOverride(definition, override)
+	require.NoError(t, err)
+	assert.Equal(t, bundle.Credential{
+		Location:    bundle.Location{EnvironmentVariable: "ACME_SECRET"},
+		Description: "Read by a secret or a config of the stack's override",
+		Required:    true,
+		ApplyTo:     []string{cnab.ActionInstall, cnab.ActionUpgrade},
+	}, extended.Credentials["acme-secret"], "named after its variable, required as the bundle's own")
+	assert.Len(t, extended.Credentials, 3, "a parameter or a credential of the bundle is the bundle's")
+	assert.Len(t, definition.Credentials, 2, "the bundle itself is left as it is")
+
+	merged := Merge(extended, []valuesource.Strategy{{Name: "acme-secret", Source: valuesource.Source{Key: "env", Value: "STACK_SECRET"}}}, nil)
+	assert.Len(t, merged, 1, "the stack's credential the override reads goes to the installation")
+
+	packed, err := Pack(definition, extended, valuesource.Set{"certificate": "PEM", "acme-secret": "s3cret"})
+	require.NoError(t, err)
+	assert.Equal(t, "PEM", packed["certificate"])
+	assert.JSONEq(t, `{"ACME_SECRET":"s3cret"}`, packed[cnab.CredentialOverride], "by variable, as the installer reads it")
+	assert.NotContains(t, packed, "acme-secret")
+
+	unchanged, err := WithOverride(definition, "")
+	require.NoError(t, err)
+	assert.Equal(t, definition, unchanged)
+	packed, err = Pack(definition, definition, valuesource.Set{"certificate": "PEM"})
+	require.NoError(t, err)
+	assert.Equal(t, valuesource.Set{"certificate": "PEM"}, packed, "nothing to pack without an override")
+
+	older := cnab.ExtendedBundle{Bundle: bundle.Bundle{Name: "gateway"}}
+	_, err = Pack(older, extended, valuesource.Set{"acme-secret": "s3cret"})
+	require.ErrorContains(t, err, "can't give its override secrets")
+}

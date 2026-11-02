@@ -126,6 +126,7 @@ The bundles to install. Their order does not matter: nemo orders them by their d
 | `bundle.file` | A `bundle.json` file, instead of `repository` and `version`. |
 | `parameters` | Parameters for this installation, over the stack's. |
 | `credentials` | Credentials for this installation, over the stack's. Same shape as the stack's. |
+| `override` | A compose document, as YAML text, that gill fuses into the bundle's, last: what this stack changes of the bundle. See [overrides](../guides/stacks.md#overrides). |
 
 ## JSON
 

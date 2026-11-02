@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/compose-spec/compose-go/v2/loader"
 	"github.com/compose-spec/compose-go/v2/types"
@@ -43,8 +44,8 @@ type ComposeDocument struct {
 // environment; with none, as when a bundle is built, they are not, and
 // keep their variables. The documents are left as they are: the loader
 // normalizes what it is given, so it is given a copy.
-func (compose Compose) Load(ctx context.Context, name, workingDir string, environment types.Mapping) (*types.Project, error) {
-	files := make([]types.ConfigFile, len(compose.Documents))
+func (compose Compose) Load(ctx context.Context, name, workingDir string, environment types.Mapping, override string) (*types.Project, error) {
+	files := make([]types.ConfigFile, len(compose.Documents), len(compose.Documents)+1)
 	for i, document := range compose.Documents {
 		data, err := json.Marshal(document.Config)
 		if err != nil {
@@ -56,6 +57,10 @@ func (compose Compose) Load(ctx context.Context, name, workingDir string, enviro
 		}
 		integers(config)
 		files[i] = types.ConfigFile{Filename: cmp.Or(document.Name, fmt.Sprintf("compose-%d.yaml", i)), Config: config}
+	}
+	// As text, for the loader to read its !reset and !override tags.
+	if strings.TrimSpace(override) != "" {
+		files = append(files, types.ConfigFile{Filename: "override.yaml", Content: []byte(override)})
 	}
 	return loader.LoadWithContext(ctx, types.ConfigDetails{WorkingDir: workingDir, ConfigFiles: files, Environment: environment}, func(options *loader.Options) {
 		options.SetProjectName(name, true)

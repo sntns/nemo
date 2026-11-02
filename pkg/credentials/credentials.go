@@ -13,6 +13,7 @@
 package credentials
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -21,6 +22,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cnabio/cnab-go/bundle"
 	cnabcredentials "github.com/cnabio/cnab-go/credentials"
 	"github.com/cnabio/cnab-go/secrets/host"
 	"github.com/cnabio/cnab-go/valuesource"
@@ -133,4 +135,66 @@ func Resolve(strategies []valuesource.Strategy, bundle cnab.ExtendedBundle, acti
 		return nil, err
 	}
 	return values, cnabcredentials.Validate(values, bundle.Credentials, action)
+}
+
+// WithOverride returns the bundle as an installation's override extends it:
+// each variable the override reads a secret or a config from, that is neither
+// a parameter nor a credential of the bundle, is declared as a credential,
+// required by install and upgrade, named after it, TLS_KEY as tls-key. The
+// stack's credentials of those names are then merged, resolved and checked as
+// the bundle's own, and Pack hands them to the installer.
+func WithOverride(definition cnab.ExtendedBundle, override string) (cnab.ExtendedBundle, error) {
+	sources, err := cnab.OverrideSources(override)
+	if len(sources) == 0 || err != nil {
+		return definition, err
+	}
+	known := map[string]bool{}
+	for _, parameter := range definition.Parameters {
+		if parameter.Destination != nil {
+			known[parameter.Destination.EnvironmentVariable] = true
+		}
+	}
+	for _, credential := range definition.Credentials {
+		known[credential.EnvironmentVariable] = true
+	}
+	extended := definition
+	extended.Credentials = maps.Clone(definition.Credentials)
+	if extended.Credentials == nil {
+		extended.Credentials = map[string]bundle.Credential{}
+	}
+	for _, variable := range sources {
+		if known[variable] {
+			continue
+		}
+		extended.Credentials[strings.ToLower(strings.ReplaceAll(variable, "_", "-"))] = bundle.Credential{
+			Location:    bundle.Location{EnvironmentVariable: variable},
+			Description: "Read by a secret or a config of the stack's override",
+			Required:    true,
+			ApplyTo:     []string{cnab.ActionInstall, cnab.ActionUpgrade},
+		}
+	}
+	return extended, nil
+}
+
+// Pack moves the values of the credentials the bundle does not declare, those
+// WithOverride adds, into the credential the installer reads them from, as
+// JSON by variable.
+func Pack(definition, extended cnab.ExtendedBundle, values valuesource.Set) (valuesource.Set, error) {
+	packed, secrets := valuesource.Set{}, map[string]string{}
+	for name, value := range values {
+		if _, declared := definition.Credentials[name]; declared {
+			packed[name] = value
+			continue
+		}
+		secrets[extended.Credentials[name].EnvironmentVariable] = value
+	}
+	if len(secrets) == 0 {
+		return packed, nil
+	}
+	if _, declared := definition.Credentials[cnab.CredentialOverride]; !declared {
+		return nil, fmt.Errorf("the bundle %s was built by a nemo that can't give its override secrets: build it again", definition.Name)
+	}
+	data, err := json.Marshal(secrets)
+	packed[cnab.CredentialOverride] = string(data)
+	return packed, err
 }

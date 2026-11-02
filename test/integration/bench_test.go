@@ -59,6 +59,9 @@ type bench struct {
 	// variable of its name, as a runtime delivers a bundle's credentials.
 	credentials map[string]string
 
+	// override is the stack's override of the installation, given to every action.
+	override string
+
 	// timeout is the nemo-timeout of the actions.
 	timeout time.Duration
 
@@ -131,6 +134,7 @@ func (b *bench) run(action, project string, purge bool) error {
 			cnab.ParameterOrchestrator: b.orchestrator,
 			cnab.ParameterTimeout:      b.timeout.String(),
 			cnab.ParameterPurge:        purge,
+			cnab.ParameterOverride:     b.override,
 		},
 		Credentials: b.credentials,
 	}
