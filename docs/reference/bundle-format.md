@@ -17,10 +17,6 @@ A top-level block of one of the compose files given to `nemo bundle build`.
 | `dependencies.requires.<label>.bundle` | string | A bundle this one requires: its repository, `REGISTRY/PATH/NAME`. Its last part is the bundle's name. |
 | `dependencies.requires.<label>.version.ranges` | list of strings | Semantic version ranges, any of which the dependency must satisfy: `">=2.0.0 <3.0.0"`. |
 | `dependencies.requires.<label>.version.prereleases` | boolean | Whether prereleases satisfy the ranges. |
-| `parameters.<name>` | map | A string parameter the bundle declares besides the variables of its compose files, say a mode only a `required-if` reads. Its name is lowercase words joined by `-`; the installer gets it in the variable of that name, `mongo` in `MONGO`. |
-| `parameters.<name>.description` | string | |
-| `parameters.<name>.default` | string | Its value when the stack gives none. |
-| `parameters.<name>.enum` | list of strings | The values it takes. Its default must be one of them. |
 
 `dependencies` is written as the CNAB [dependencies specification](https://github.com/cnabio/cnab-spec/blob/main/500-CNAB-dependencies.md) writes it, and copied into the bundle's `io.cnab.dependencies` extension.
 
@@ -43,32 +39,13 @@ volumes:
 
 A volume with a type can't set `driver`, `driver_opts` or `external`.
 
-## `x-nemo-credential`
-
-A block of a top-level secret read from a variable, saying when its credential is required:
-
-```yaml
-secrets:
-  certificate:
-    environment: CERTIFICATE
-    x-nemo-credential:
-      required-if: { tls: certificate }
-```
-
-| Field | Type | |
-|---|---|---|
-| `required-if` | map of parameter to value | **Required.** The credential is required when every parameter has its value, defaults included. Each must be a parameter of the bundle. |
-
-The bundle declares the credential optional, as CNAB has no condition. gill checks it on install and upgrade: a credential required and not given stops the action; one neither given nor required leaves its secret out of the services.
-
 ## What becomes what
 
 | In the compose files | In the bundle |
 |---|---|
 | `${VARIABLE}`, `${VARIABLE:-default}`, `${VARIABLE:?message}` | A string parameter named in lowercase with dashes, `variable`, with its default, required with `:?` |
 | A config read from `environment: VARIABLE` | A string parameter, `variable` |
-| `x-nemo-bundle.parameters.<name>` | A string parameter, `<name>`, with its description, default and values; a `${VARIABLE}` of the same name is that parameter |
-| A secret read from `environment: VARIABLE` | A credential, `variable`, required on install and upgrade, or optional with `x-nemo-credential` |
+| A secret read from `environment: VARIABLE` | A credential, `variable`, required on install and upgrade |
 | A config with `content:` | Kept in the compose project, filled with the parameters |
 | A config or secret read from `file:` | Refused: a bundle carries no files |
 | Each service's `image`, with `--image` | An entry of `images`, with its digest |
