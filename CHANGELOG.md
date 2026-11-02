@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.10.0](https://github.com/sntns/nemo/compare/v0.9.0...v0.10.0) (2026-11-02)
+
+
+### Features
+
+* **release:** publish deb, rpm and apk packages, SBOMs, signed checksums and provenance, and sign gill ([f8cfc23](https://github.com/sntns/nemo/commit/f8cfc23caca5f346595906b19c7f637d2bd45e1e))
+
+
+### Bug Fixes
+
+* give a stack's installations only the parameters the stack gives ([00b2bcd](https://github.com/sntns/nemo/commit/00b2bcdaa6dc1b134dc73ab72f3ac8021ace386a))
+
 ## [0.9.0](https://github.com/sntns/nemo/compare/v0.8.0...v0.9.0) (2026-10-30)
 
 
