@@ -18,6 +18,7 @@ import (
 	validation "github.com/go-ozzo/ozzo-validation/v4"
 
 	"github.com/sntns/nemo/internal/decode"
+	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/credentials"
 	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/target"
@@ -129,8 +130,12 @@ func (stack Stack) Validate() error {
 	noRemote := fmt.Sprintf("where are %s? Give it in the manifest, or with nemo stack import --remote: "+
 		"oci:DIRECTORY/{{ .Component }}.oci, or docker://REGISTRY/{{ .Component }}:{{ .Version }}", strings.Join(byRemote, ", "))
 	inStack := validation.By(func(value any) error {
-		if installation := value.(storage.InstallationSpec); installation.Stack != "" && installation.Stack != stack.Name {
+		installation := value.(storage.InstallationSpec)
+		if installation.Stack != "" && installation.Stack != stack.Name {
 			return fmt.Errorf("%s is in the stack %s", installation.Name, installation.Stack)
+		}
+		if _, err := cnab.OverrideSources(installation.Override); err != nil {
+			return fmt.Errorf("%s: %w", installation.Name, err)
 		}
 		return nil
 	})

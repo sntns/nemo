@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/installer/compose"
 	nemoswarm "github.com/sntns/nemo/pkg/installer/swarm"
 	"github.com/sntns/nemo/pkg/progress"
@@ -345,4 +346,38 @@ services:
 `))
 
 	assert.Equal(t, 1, runningContainers(b.containers("sidecar")))
+}
+
+func TestBoth_anOverrideChangesTheBundle(t *testing.T) {
+	onBoth(t, func(t *testing.T, b *bench) {
+		project := `
+services:
+  web:
+    image: busybox:1.37
+    command: ["sh", "-c", "test \"$$GREETING\" = hello && test \"$$(cat /run/secrets/token)\" = s3cret || exit 1; exec sleep 3600"]
+    environment:
+      GREETING: bye
+    deploy:
+      restart_policy:
+        condition: none
+`
+		b.credentials = map[string]string{cnab.CredentialOverride: `{"TOKEN":"s3cret"}`}
+		override := `
+services:
+  web:
+    environment:
+      GREETING: hello
+    secrets: [token]
+secrets:
+  token:
+    environment: TOKEN
+`
+		b.override = override
+		require.NoError(t, b.install(project), "the service starts only with the override's variable and secret")
+		assert.Equal(t, 1, b.replicas("web"))
+
+		b.override = "services: { web: { image: busybox:1.36 } }"
+		require.ErrorContains(t, b.validate(project), "the bundle pins its images")
+		b.override = override
+	})
 }

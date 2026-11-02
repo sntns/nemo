@@ -105,16 +105,18 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	}
 
 	built := bundle.Bundle{
-		SchemaVersion:      bundle.GetDefaultSchemaVersion(),
-		Name:               metadata.Name,
-		Version:            version,
-		Description:        metadata.Description,
-		License:            metadata.License,
-		Keywords:           metadata.Keywords,
-		Maintainers:        metadata.Maintainers,
-		Definitions:        nemoDefinitions(),
-		Parameters:         nemoParameters(),
-		Credentials:        map[string]bundle.Credential{},
+		SchemaVersion: bundle.GetDefaultSchemaVersion(),
+		Name:          metadata.Name,
+		Version:       version,
+		Description:   metadata.Description,
+		License:       metadata.License,
+		Keywords:      metadata.Keywords,
+		Maintainers:   metadata.Maintainers,
+		Definitions:   nemoDefinitions(),
+		Parameters:    nemoParameters(),
+		Credentials: map[string]bundle.Credential{
+			cnab.CredentialOverride: {Location: bundle.Location{EnvironmentVariable: "NEMO_CREDENTIALS"}, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Description: "The secrets the override reads its secrets and configs from, as JSON by variable"},
+		},
 		Actions:            map[string]bundle.Action{cnab.ActionValidate: {Stateless: true, Description: "Check the bundle against the target, and change nothing"}},
 		RequiredExtensions: []string{cnab.DockerExtension.Key},
 	}
@@ -137,7 +139,7 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	built.InvocationImages = []bundle.InvocationImage{{BaseImage: installer}}
 
 	buildTime := cnab.Compose{Documents: buildable(documents)}
-	project, err := buildTime.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), types.Mapping{})
+	project, err := buildTime.Load(ctx, metadata.Name, filepath.Dir(request.ComposeFiles[0]), types.Mapping{}, "")
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("loading the compose project: %w", err)
 	}
@@ -406,6 +408,7 @@ func nemoDefinitions() definition.Definitions {
 		cnab.ParameterTimeout:      {Type: "string", Default: "5m"},
 		cnab.ParameterPurge:        {Type: "boolean", Default: false},
 		cnab.ParameterVolumes:      {Type: "object"},
+		cnab.ParameterOverride:     {Type: "string"},
 	}
 }
 
@@ -417,5 +420,6 @@ func nemoParameters() map[string]bundle.Parameter {
 		cnab.ParameterPurge:        {Definition: cnab.ParameterPurge, ApplyTo: []string{cnab.ActionUninstall}, Description: "Also remove the volumes", Destination: &bundle.Location{EnvironmentVariable: "NEMO_PURGE"}},
 		cnab.ParameterVolumes:      {Definition: cnab.ParameterVolumes, Description: "The volume types of the target, as JSON", Destination: &bundle.Location{EnvironmentVariable: "NEMO_VOLUMES"}},
 		cnab.ParameterRegistryAuth: {Definition: cnab.ParameterRegistryAuth, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Description: "The credentials of the registries the images are pulled from, as JSON by domain", Destination: &bundle.Location{EnvironmentVariable: "NEMO_REGISTRY_AUTH"}},
+		cnab.ParameterOverride:     {Definition: cnab.ParameterOverride, Description: "A compose document fused into the bundle's, last, as YAML: the override the stack gives the installation", Destination: &bundle.Location{EnvironmentVariable: "NEMO_OVERRIDE"}},
 	}
 }

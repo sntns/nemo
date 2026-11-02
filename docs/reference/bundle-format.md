@@ -86,6 +86,9 @@ Every nemo bundle declares these parameters, through which nemo tells gill about
 | `nemo-purge` | `NEMO_PURGE` | On uninstall, also remove the volumes. nemo sets it with `--purge`. |
 | `nemo-volumes` | `NEMO_VOLUMES` | The target's volume types, as JSON. nemo sets it from the target. |
 | `nemo-registry-auth` | `NEMO_REGISTRY_AUTH` | The credentials of the registries the images come from, as JSON. Sensitive. nemo sets it from `docker login`. |
+| `nemo-override` | `NEMO_OVERRIDE` | A compose document, as YAML, that gill fuses into the bundle's, last. nemo sets it from the installation's `override` in the manifest. |
+
+They declare one credential too, `nemo-credentials`, which gill reads as `NEMO_CREDENTIALS` on install and upgrade: the secrets the override's secrets and configs read, as JSON by variable. nemo fills it from the credentials the stack gives that the bundle does not declare, those the override reads alone.
 
 ## Actions
 

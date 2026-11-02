@@ -43,12 +43,12 @@ func TestCompose_LoadLeavesTheDocuments(t *testing.T) {
 		"services": map[string]any{"web": map[string]any{"image": "nginx:${TAG}", "ports": []any{"8080:80"}}},
 	}}}}
 
-	project, err := compose.Load(context.Background(), "demo", "/", nil)
+	project, err := compose.Load(context.Background(), "demo", "/", nil, "")
 	require.NoError(t, err)
 	assert.Equal(t, "nginx:${TAG}", project.Services["web"].Image, "not interpolated")
 	assert.Equal(t, []any{"8080:80"}, compose.Documents[0].Config["services"].(map[string]any)["web"].(map[string]any)["ports"], "the loader normalized a copy")
 
-	project, err = compose.Load(context.Background(), "demo", "/", map[string]string{"TAG": "1.27"})
+	project, err = compose.Load(context.Background(), "demo", "/", map[string]string{"TAG": "1.27"}, "")
 	require.NoError(t, err)
 	assert.Equal(t, "nginx:1.27", project.Services["web"].Image)
 }
@@ -68,7 +68,7 @@ func TestCompose_LoadTakesTheNumbersOfAJSONDocument(t *testing.T) {
 		"configs": map[string]any{"app": map[string]any{"content": "hello"}},
 	}}}}
 
-	project, err := compose.Load(context.Background(), "demo", "/", map[string]string{})
+	project, err := compose.Load(context.Background(), "demo", "/", map[string]string{}, "")
 	require.NoError(t, err)
 	web := project.Services["web"]
 	assert.Equal(t, 1024, web.Ulimits["nofile"].Soft)

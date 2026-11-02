@@ -3,6 +3,7 @@ package installer
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"slices"
@@ -87,7 +88,14 @@ func LoadProject(ctx context.Context, operation Operation) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	compose, err := bundle.Compose.Load(ctx, installation.Stack, AppDir, variables)
+	override, err := parameter[string](operation.Parameters, cnab.ParameterOverride)
+	if err != nil {
+		return nil, err
+	}
+	if err := bundle.Compose.CheckOverride(override); err != nil {
+		return nil, err
+	}
+	compose, err := bundle.Compose.Load(ctx, installation.Stack, AppDir, variables, override)
 	if err != nil {
 		return nil, fmt.Errorf("loading the compose project of %s: %w", bundle.Name, err)
 	}
@@ -170,6 +178,13 @@ func (operation Operation) resolveFileObjects(compose *types.Project, parameters
 			variables[variable] = value
 		}
 	}
+	if packed := operation.Credentials[cnab.CredentialOverride]; packed != "" {
+		var secrets map[string]string
+		if err := json.Unmarshal([]byte(packed), &secrets); err != nil {
+			return fmt.Errorf("credential %s: %w", cnab.CredentialOverride, err)
+		}
+		maps.Copy(variables, secrets)
+	}
 
 	resolve := func(kind, key string, object types.FileObjectConfig) (types.FileObjectConfig, error) {
 		switch {
@@ -178,7 +193,7 @@ func (operation Operation) resolveFileObjects(compose *types.Project, parameters
 		case object.Environment != "":
 			value, ok := variables[object.Environment]
 			if !ok {
-				return object, fmt.Errorf("%s.%s: the variable %s is neither a parameter nor a credential of the bundle", kind, key, object.Environment)
+				return object, fmt.Errorf("%s.%s: the variable %s is neither a parameter nor a credential of the bundle, nor a credential the stack gives its override", kind, key, object.Environment)
 			}
 			object.Content, object.Environment = value, ""
 		case object.File != "":

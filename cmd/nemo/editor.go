@@ -1164,6 +1164,9 @@ func ownValues(installation storage.InstallationSpec) []string {
 	for _, strategy := range installation.Credentials {
 		values = append(values, strategy.Name+" "+sourceSummary(strategy))
 	}
+	if override := strings.TrimSpace(installation.Override); override != "" {
+		values = append(values, fmt.Sprintf("override of %d lines", strings.Count(override, "\n")+1))
+	}
 	return values
 }
 

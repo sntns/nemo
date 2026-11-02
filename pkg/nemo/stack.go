@@ -252,9 +252,14 @@ func (plan *upPlan) actionRequest(bundle cnab.ExtendedBundle, events progress.Si
 		}
 	}
 	maps.Copy(parameters, entry.spec.Parameters)
+	if entry.spec.Override != "" {
+		parameters[cnab.ParameterOverride] = entry.spec.Override
+	}
 	spec := entry.spec
-	spec.Parameters = parameters
-	spec.Credentials = credentials.Merge(bundle, plan.stack.Credentials, entry.spec.Credentials)
+	spec.Parameters, spec.Override = parameters, ""
+	// The manifest's overrides were checked when the stack was read.
+	extended, _ := credentials.WithOverride(bundle, entry.spec.Override)
+	spec.Credentials = credentials.Merge(extended, plan.stack.Credentials, entry.spec.Credentials)
 	return ActionRequest{
 		InstallationSpec:  spec,
 		BundleSource:      entry.source,
@@ -399,10 +404,12 @@ func (nemo *Nemo) manifestCredentials(stackName string, bundle cnab.ExtendedBund
 		return nil
 	}
 	var own []valuesource.Strategy
+	extended := bundle
 	for _, installation := range opened.manifest.Installations {
 		if installation.Name == bundle.Name {
 			own = installation.Credentials
+			extended, _ = credentials.WithOverride(bundle, installation.Override)
 		}
 	}
-	return credentials.Merge(bundle, opened.manifest.Credentials, own)
+	return credentials.Merge(extended, opened.manifest.Credentials, own)
 }

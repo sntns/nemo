@@ -59,6 +59,10 @@ type InstallationSpec struct {
 	// Credentials are the sources of the credentials, the strategies of a
 	// CNAB credential set; their values are never stored.
 	Credentials []valuesource.Strategy `json:"credentials,omitempty"`
+	// Override is a compose document, as YAML, fused into the bundle's: what
+	// the installation changes of it, in its stack. It goes to the installer as
+	// the nemo-override parameter, with which it is recorded.
+	Override string `json:"override,omitempty"`
 }
 
 // BundleReference is where an installation's bundle is, as Porter's

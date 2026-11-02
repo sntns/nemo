@@ -21,6 +21,7 @@ import (
 	nemobundle "github.com/sntns/nemo/pkg/bundle"
 	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/progress"
+	"github.com/sntns/nemo/pkg/runtime"
 	"github.com/sntns/nemo/pkg/stack"
 	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/target"
@@ -483,4 +484,55 @@ func TestManifestCredentials(t *testing.T) {
 	nginx := cnab.ExtendedBundle{Bundle: bundle.Bundle{Name: "nginx", Credentials: map[string]bundle.Credential{"token": {}, "password": {}}}}
 	assert.Equal(t, []valuesource.Strategy{stacks("password"), own}, nemo.manifestCredentials("demo", nginx))
 	assert.Nil(t, nemo.manifestCredentials("other", nginx), "a stack nemo has no manifest of")
+}
+
+// overridable declares nemo-override and nemo-credentials in the bundle written at path, as the bundles nemo builds do.
+func overridable(t *testing.T, path string) string {
+	t.Helper()
+	extended, err := cnab.LoadBundle(path)
+	require.NoError(t, err)
+	extended.Parameters[cnab.ParameterOverride] = bundle.Parameter{Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "NEMO_OVERRIDE"}}
+	extended.Credentials = map[string]bundle.Credential{cnab.CredentialOverride: {Location: bundle.Location{EnvironmentVariable: "NEMO_CREDENTIALS"}, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}}}
+	data, err := json.Marshal(extended.Bundle)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	return path
+}
+
+func TestUpGivesTheOverride(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	directory := filepath.Dir(bundleFile)
+	override := "secrets:\n  acme-secret: { environment: ACME_SECRET }\n"
+	demo := stack.Stack{
+		Name:        "demo",
+		Target:      target.Target{Orchestrator: target.Compose},
+		Credentials: []valuesource.Strategy{{Name: "acme-secret", Source: valuesource.Source{Key: "value", Value: "s3cret"}}},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: overridable(t, writeBundle(t, directory, "web"))}, Override: override},
+			{Name: "database", Bundle: storage.BundleReference{File: overridable(t, writeBundle(t, directory, "database"))}},
+		},
+	}
+	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+
+	requests := map[string]runtime.Request{}
+	for _, request := range fake.requests {
+		requests[request.Bundle.Name] = request
+	}
+	assert.Equal(t, override, requests["web"].Parameters[cnab.ParameterOverride], "the installer gets the override")
+	assert.JSONEq(t, `{"ACME_SECRET":"s3cret"}`, requests["web"].Credentials[cnab.CredentialOverride], "and the stack's credential it reads")
+	assert.NotContains(t, requests["database"].Credentials, cnab.CredentialOverride, "a bundle without an override gets none of them")
+	web, err := nemo.Installation(ctx, "demo", "web")
+	require.NoError(t, err)
+	assert.Equal(t, override, web.Parameters[cnab.ParameterOverride], "recorded with the parameters")
+
+	demo.Installations = append(demo.Installations, storage.InstallationSpec{Name: "cache", Bundle: storage.BundleReference{File: writeBundle(t, directory, "cache")}, Override: override})
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.ErrorContains(t, err, "the bundle cache was built by a nemo that can't take an override")
+
+	demo.Installations[2].Override = "- not a document"
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.ErrorContains(t, err, "cache: override: a compose document", "checked when the stack is read")
 }

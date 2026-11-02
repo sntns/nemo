@@ -16,4 +16,12 @@ const (
 	// images are pulled from, by domain, as JSON. It is sensitive: the
 	// runtime fills it from docker login and never stores it.
 	ParameterRegistryAuth = "nemo-registry-auth"
+	// ParameterOverride is a compose document, as YAML, that the installer
+	// fuses into the bundle's, last: the override a stack gives an installation.
+	ParameterOverride = "nemo-override"
 )
+
+// CredentialOverride holds the secrets an override reads its secrets' and
+// configs' contents from, as JSON by variable. The runtime fills it from the
+// credentials the stack gives that the bundle does not declare.
+const CredentialOverride = "nemo-credentials"

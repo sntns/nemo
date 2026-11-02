@@ -180,7 +180,7 @@ func TestLoadProject_unknownVariable(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = LoadProject(context.Background(), operation)
-	require.EqualError(t, err, "configs.region: the variable REGION is neither a parameter nor a credential of the bundle")
+	require.EqualError(t, err, "configs.region: the variable REGION is neither a parameter nor a credential of the bundle, nor a credential the stack gives its override")
 }
 
 func TestLoadProject_stack(t *testing.T) {
@@ -390,4 +390,62 @@ func TestProject_ValidateLeavesTheDependenciesTheLoaderAdded(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NoError(t, project.Validate())
+}
+
+// The override a stack gives: fused last into the bundle's compose, its
+// secrets filled from the credentials the runtime packs in nemo-credentials.
+func TestLoadProject_override(t *testing.T) {
+	t.Parallel()
+
+	operationWith := func(environment map[string]string) (Operation, error) {
+		cnabBundle := testBundle(func(cnabBundle *bundle.Bundle) {
+			withCompose(map[string]any{
+				"services": map[string]any{"proxy": map[string]any{
+					"image":       "traefik:v3.6.2",
+					"environment": map[string]any{"LOG_LEVEL": "info"},
+				}},
+			})(cnabBundle)
+			cnabBundle.Definitions = definition.Definitions{"string": &definition.Schema{Type: "string"}}
+			cnabBundle.Parameters = map[string]bundle.Parameter{
+				cnab.ParameterOverride: {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "NEMO_OVERRIDE"}},
+			}
+			cnabBundle.Credentials = map[string]bundle.Credential{
+				cnab.CredentialOverride: {Location: bundle.Location{EnvironmentVariable: "NEMO_CREDENTIALS"}, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}},
+			}
+		})
+		return ReadOperation(container(t, cnabBundle, environment, nil))
+	}
+
+	operation, err := operationWith(map[string]string{
+		"NEMO_OVERRIDE": `
+services:
+  proxy:
+    environment: { LOG_LEVEL: debug }
+    secrets: [acme-secret]
+secrets:
+  acme-secret: { environment: ACME_SECRET }
+`,
+		"NEMO_CREDENTIALS": `{"ACME_SECRET":"s3cret"}`,
+	})
+	require.NoError(t, err)
+	project, err := LoadProject(context.Background(), operation)
+	require.NoError(t, err)
+	assert.Equal(t, "debug", *project.Compose.Services["proxy"].Environment["LOG_LEVEL"])
+	assert.Equal(t, "s3cret", project.Compose.Secrets["acme-secret"].Content, "read from the packed credentials")
+
+	operation, err = operationWith(map[string]string{"NEMO_OVERRIDE": "services: { proxy: { image: traefik:v4 } }"})
+	require.NoError(t, err)
+	_, err = LoadProject(context.Background(), operation)
+	require.ErrorContains(t, err, "the bundle pins its images")
+
+	operation, err = operationWith(map[string]string{"NEMO_OVERRIDE": "secrets: { acme-secret: { environment: ACME_SECRET } }"})
+	require.NoError(t, err)
+	_, err = LoadProject(context.Background(), operation)
+	require.ErrorContains(t, err, "the variable ACME_SECRET is neither a parameter nor a credential of the bundle", "the runtime gave none")
+
+	operation, err = operationWith(map[string]string{EnvAction: cnab.ActionUninstall, "NEMO_OVERRIDE": "secrets: { acme-secret: { environment: ACME_SECRET } }"})
+	require.NoError(t, err)
+	project, err = LoadProject(context.Background(), operation)
+	require.NoError(t, err, "an uninstall needs no content")
+	assert.Contains(t, project.Compose.Secrets, "acme-secret", "and finds what the override added, to remove it")
 }
