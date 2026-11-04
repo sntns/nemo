@@ -1,5 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "extra-label": "ci/validate-only",
   "release-type": "go",
   "initial-version": "0.1.0",
   "bump-minor-pre-major": true,
