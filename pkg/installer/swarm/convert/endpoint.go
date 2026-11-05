@@ -17,11 +17,11 @@ func endpoint(service types.ServiceConfig, deploy *types.DeployConfig) (*swarm.E
 	}
 	spec := &swarm.EndpointSpec{Mode: resolution}
 	for _, port := range service.Ports {
-		published := 0
+		var published uint64
 		if port.Published != "" {
 			var err error
-			if published, err = strconv.Atoi(port.Published); err != nil {
-				return nil, fmt.Errorf("published port %q: swarm takes a single port, not a range", port.Published)
+			if published, err = strconv.ParseUint(port.Published, 10, 16); err != nil {
+				return nil, fmt.Errorf("published port %q: swarm takes a single port, from 0 to 65535, not a range", port.Published)
 			}
 		}
 		spec.Ports = append(spec.Ports, swarm.PortConfig{
