@@ -73,7 +73,23 @@ func TestVerdictOf(t *testing.T) {
 				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later}
 				return service
 			}(),
-			nil, progressing, "",
+			nil, paused, "paused",
+		},
+		"paused, an old task still runs": {
+			func() swarm.Service {
+				service := replicated(2, 1)
+				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &later, Message: "update paused due to failure or early termination of task x"}
+				return service
+			}(),
+			[]swarm.Task{running}, paused, "update paused due to failure or early termination of task x",
+		},
+		"paused by an earlier update": {
+			func() swarm.Service {
+				service := replicated(2, 1)
+				service.UpdateStatus = &swarm.UpdateStatus{State: swarm.UpdateStatePaused, StartedAt: &earlier}
+				return service
+			}(),
+			[]swarm.Task{running}, progressing, "",
 		},
 		"paused, then restarted": {
 			func() swarm.Service {

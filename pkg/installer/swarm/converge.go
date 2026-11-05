@@ -15,12 +15,20 @@ import (
 // pollInterval is how often converge looks at a service.
 const pollInterval = 500 * time.Millisecond
 
+// resumes is how many times converge resumes an update of nemo's that Swarm paused: a task that
+// failed to start once, as when the daemon is too busy to prepare it, does not stop the rollout,
+// but one that fails again is the update's failure.
+const resumes = 2
+
 // converge waits until the service has converged and stays so for its update monitor period, the
-// way docker service update does: a task that starts then crashes is caught. It reports its
-// running and desired tasks and the state of the least advanced, when they change.
-func (orchestrator *Orchestrator) converge(ctx context.Context, id string, own ownUpdate, report func(running, desired uint64, phase string)) error {
+// way docker service update does: a task that starts then crashes is caught. Swarm pauses an
+// update whose task fails, and waits for someone to resume it: converge resumes it, up to resumes
+// times. It reports its running and desired tasks and the state of the least advanced, when they
+// change.
+func (orchestrator *Orchestrator) converge(ctx context.Context, id string, own ownUpdate, resume func(context.Context, swarm.Service) error, report func(running, desired uint64, phase string)) error {
 	var steady steadiness
 	var reported string
+	resumed := 0
 	for {
 		service, tasks, err := orchestrator.serviceState(ctx, id)
 		if err != nil {
@@ -32,6 +40,16 @@ func (orchestrator *Orchestrator) converge(ctx context.Context, id string, own o
 			return orchestrator.withTaskError(ctx, id, fmt.Errorf("swarm rolled the update back: %s", look.rollback))
 		case gaveUp:
 			return orchestrator.withTaskError(ctx, id, errors.New("swarm stopped restarting its task, as its restart policy says"))
+		case paused:
+			if resumed == resumes {
+				return orchestrator.withTaskError(ctx, id, fmt.Errorf("swarm paused the update again after %d resumes: %s", resumes, look.rollback))
+			}
+			if err := resume(ctx, service); err != nil {
+				return err
+			}
+			// The update that resumes is nemo's too: one Swarm starts after the paused one.
+			own, resumed = ownUpdate{changed: true, after: *service.UpdateStatus.StartedAt}, resumed+1
+			look.phase = "resuming the update Swarm paused"
 		case converged:
 			if steady.held(time.Now(), monitor(service)) {
 				return nil
@@ -88,12 +106,14 @@ const (
 	rolledBack
 	// gaveUp: Swarm stopped restarting a failed task, as its restart policy says.
 	gaveUp
+	// paused: Swarm paused nemo's update as a task failed, with tasks of the spec still to run.
+	paused
 )
 
 // observation is one look at a service: its verdict, and what to show of it.
 type observation struct {
 	verdict verdict
-	// rollback is Swarm's message when it rolled nemo's update back.
+	// rollback is Swarm's message when it rolled nemo's update back, or paused it.
 	rollback string
 
 	running, desired uint64
@@ -115,16 +135,21 @@ func observe(service swarm.Service, tasks []swarm.Task, own ownUpdate) observati
 	return look
 }
 
-// verdictOf says where nemo's change stands, and Swarm's message when it rolled it back. A task
-// with a healthcheck only runs once healthy, so depends_on conditions on health hold too. An update
-// Swarm paused as a task failed is not a failure: the restart policy restarts that task until it runs.
+// verdictOf says where nemo's change stands, and Swarm's message when it rolled it back or paused
+// it. A task with a healthcheck only runs once healthy, so depends_on conditions on health hold
+// too. An update Swarm paused as a task failed is paused only while tasks of the spec are still
+// to run: the restart policy restarted the failed one, but Swarm updates the others only once
+// someone resumes it.
 func verdictOf(service swarm.Service, tasks []swarm.Task, own ownUpdate) (verdict, string) {
+	pausedBy := ""
 	if status := service.UpdateStatus; own.of(status) {
 		switch status.State {
 		case swarm.UpdateStateUpdating:
 			return progressing, ""
 		case swarm.UpdateStateRollbackStarted, swarm.UpdateStateRollbackPaused, swarm.UpdateStateRollbackCompleted:
 			return rolledBack, status.Message
+		case swarm.UpdateStatePaused:
+			pausedBy = cmp.Or(status.Message, "paused")
 		}
 	}
 	switch {
@@ -132,6 +157,8 @@ func verdictOf(service swarm.Service, tasks []swarm.Task, own ownUpdate) (verdic
 		return gaveUp, ""
 	case tasksConverged(service, tasks):
 		return converged, ""
+	case pausedBy != "":
+		return paused, pausedBy
 	}
 	return progressing, ""
 }
