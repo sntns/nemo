@@ -73,3 +73,19 @@ func resolveVolumes(compose *types.Project, stack string, volumeTypes map[string
 	}
 	return provisions, nil
 }
+
+// SharedInstallation names the installation nemo gives an object that
+// installations of a stack share, by the group its installer reports it in
+// and its name: network.NAME, volume.NAME, config.NAME or secret.NAME. Its
+// bundle declares the object alone, with no service.
+func SharedInstallation(group, name string) string {
+	return strings.TrimSuffix(group, "s") + "." + name
+}
+
+// HeldApart tells whether the object is held by the installation of its own
+// that nemo gave it, and not by this one: the installations that use it
+// leave it to that one, which removes it once they are gone.
+func HeldApart(installation Installation, objectLabels map[string]string, group, name string) bool {
+	holder := objectLabels[labels.Bundle]
+	return holder == SharedInstallation(group, name) && holder != installation.Bundle
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -30,17 +31,40 @@ type installationView struct {
 	objects  map[string]int
 	warnings []string
 	output   []string
+	// expected is how many services the installation has, when nemo told.
+	expected int
+	// kind is set on the row of an object installations share, the stack's
+	// own: network, volume, config or secret; users says who shares it.
+	kind  string
+	users string
 }
 
-// views follows the installations in the order they appear.
+// views follows the installations, and the objects they share, in the
+// order they appear.
 type views struct {
 	ordered []*installationView
+	// shared are the rows of the objects installations share, by group and
+	// item: what an installation's installer says of one is the stack's row's.
+	shared map[string]*installationView
 }
 
-func (views *views) of(installation string) *installationView {
-	_, name, _ := strings.Cut(installation, "/")
+func (views *views) of(event progress.Event) *installationView {
+	if !strings.Contains(event.Installation, "/") && event.Item != "" {
+		key := event.Group + "/" + event.Item
+		if view, seen := views.shared[key]; seen {
+			return view
+		}
+		if views.shared == nil {
+			views.shared = map[string]*installationView{}
+		}
+		view := &installationView{name: event.Item, kind: strings.TrimSuffix(event.Group, "s"), state: progress.Pending}
+		views.shared[key] = view
+		views.ordered = append(views.ordered, view)
+		return view
+	}
+	_, name, _ := strings.Cut(event.Installation, "/")
 	for _, view := range views.ordered {
-		if view.name == name {
+		if view.kind == "" && view.name == name {
 			return view
 		}
 	}
@@ -49,15 +73,34 @@ func (views *views) of(installation string) *installationView {
 	return view
 }
 
-// apply records the event, and returns the view it changed.
+// apply records the event, and returns the view it changed: none for an
+// installation's event about an object it shares, which the stack's row
+// tells.
 func (views *views) apply(event progress.Event) *installationView {
-	view := views.of(event.Installation)
+	if _, sharedObject := views.shared[event.Group+"/"+event.Item]; sharedObject && strings.Contains(event.Installation, "/") {
+		return nil
+	}
+	view := views.of(event)
+	if view.kind != "" {
+		switch event.State {
+		case progress.Pending:
+			view.users = event.Message
+		case progress.Warning:
+			view.warnings = append(view.warnings, event.Message)
+		default:
+			view.state = event.State
+			if event.Message != "" {
+				view.message = event.Message
+			}
+		}
+		return view
+	}
 	switch {
 	case event.Group == progress.Installation:
 		view.state = event.State
 		switch event.State {
 		case progress.Pending:
-			view.action = event.Message
+			view.action, view.expected = event.Message, int(event.Total)
 		case progress.Working:
 			view.action, view.started = event.Message, time.Now()
 		case progress.Done:
@@ -70,7 +113,7 @@ func (views *views) apply(event progress.Event) *installationView {
 	case event.Group == progress.Output:
 		view.output = append(view.output, event.Message)
 	case event.State == progress.Warning:
-		view.warnings = append(view.warnings, strings.TrimSpace(strings.TrimSuffix(event.Group, "s")+" "+event.Item+" "+event.Message))
+		view.warnings = append(view.warnings, words(strings.TrimSuffix(event.Group, "s"), event.Item, event.Message))
 	case event.Group == "services":
 		if _, seen := view.tasks[event.Item]; !seen {
 			view.services = append(view.services, event.Item)
@@ -138,12 +181,12 @@ func past(action string) string {
 // newRenderer returns the sink that shows the events on output, and the
 // function that ends it with the error of what it showed: a view redrawn in
 // place on a terminal, else a line for each change.
-func newRenderer(output *os.File, title string) (progress.Sink, func(error) error) {
+func newRenderer(output *os.File, title string, all bool) (progress.Sink, func(error) error) {
 	if !term.IsTerminal(int(output.Fd())) {
 		lines := &lines{output: output}
 		return lines, func(err error) error { return shown(err, &lines.mutex, &lines.views) }
 	}
-	live := &live{output: output, title: title, done: make(chan struct{}), stopped: make(chan struct{})}
+	live := &live{output: output, title: title, all: all, done: make(chan struct{}), stopped: make(chan struct{})}
 	_, _ = io.WriteString(output, "\033[?25l")
 	go live.run()
 	return live, func(err error) error {
@@ -180,8 +223,22 @@ func (lines *lines) Emit(event progress.Event) {
 	lines.mutex.Lock()
 	defer lines.mutex.Unlock()
 	view := lines.views.apply(event)
+	if view == nil {
+		return
+	}
 	say := func(format string, arguments ...any) {
 		fmt.Fprintf(lines.output, "%s: %s\n", view.name, fmt.Sprintf(format, arguments...))
+	}
+	if view.kind != "" {
+		switch event.State {
+		case progress.Done:
+			say("%s %s", view.kind, sharedText(view))
+		case progress.Warning:
+			say("warning: %s", event.Message)
+		case progress.Error:
+			say("%s failed: %s", view.kind, event.Message)
+		}
+		return
 	}
 	switch {
 	case event.Group == progress.Installation && event.State == progress.Working:
@@ -195,7 +252,7 @@ func (lines *lines) Emit(event progress.Event) {
 	case event.Group == progress.Output && !view.repeats(event.Message):
 		say("%s", event.Message)
 	case event.State == progress.Warning:
-		say("warning: %s %s %s", event.Group, event.Item, event.Message)
+		say("warning: %s", words(event.Group, event.Item, event.Message))
 	case event.State == progress.Error:
 		say("%s %s failed: %s", strings.TrimSuffix(event.Group, "s"), event.Item, event.Message)
 	case event.Group == "services" && event.State == progress.Done:
@@ -211,9 +268,12 @@ func (lines *lines) Emit(event progress.Event) {
 
 // live redraws the installations in place, those at work unfolded.
 type live struct {
-	mutex   sync.Mutex
-	output  *os.File
-	title   string
+	mutex  sync.Mutex
+	output *os.File
+	title  string
+	// all shows the services of every installation at work, not only of
+	// the only one, or of those in trouble.
+	all     bool
 	views   views
 	drawn   int
 	frame   int
@@ -330,83 +390,274 @@ func wrap(line string, width int) []string {
 	return lines
 }
 
-// render returns the lines of the frame: a title, then a line for each
-// installation, and the services of those at work or failed; folded, the
+// render returns the lines of the frame: a title that counts the
+// installations by where they stand, then a line for each object
+// installations share and each installation, their columns lined up. An
+// installation at work shows its services only when it is the only one at
+// work, or all shows them, else those in trouble; one that failed shows them
+// all. Folded, the
 // services ready are left to their installation's count.
 func (live *live) render(folded bool) []string {
-	frame := []string{bold.Render(live.title) + faint.Render(" · "+plural(len(live.views.ordered), "installation")), ""}
-	width := 0
+	frame := []string{bold.Render(live.title) + faint.Render(" · "+live.tally()), ""}
+	working := 0
 	for _, view := range live.views.ordered {
-		width = max(width, len(view.name))
+		if view.kind == "" && view.state == progress.Working {
+			working++
+		}
 	}
-	for _, view := range live.views.ordered {
-		name := fmt.Sprintf("%-*s", width, view.name)
-		action := fmt.Sprintf("%-9s", view.action)
-		switch view.state {
-		case progress.Pending:
-			waiting := "waiting"
-			if live.ended {
-				waiting = "not run"
+
+	rows := make([]frameRow, len(live.views.ordered))
+	shown := make([][]string, len(live.views.ordered))
+	widths := [3]int{}
+	for i, view := range live.views.ordered {
+		rows[i] = live.row(view)
+		widths[0] = max(widths[0], len(view.name))
+		// Only the lines that end with a duration line it up.
+		if rows[i].elapsed != "" {
+			widths[1] = max(widths[1], utf8.RuneCountInString(rows[i].detail))
+		}
+		if view.kind != "" {
+			continue
+		}
+		for _, name := range slices.Sorted(slices.Values(view.services)) {
+			task := view.tasks[name]
+			unfold := view.state == progress.Error || view.state == progress.Working && (live.all || working == 1 || inTrouble(task))
+			if unfold && (!folded || task.State != progress.Done) {
+				shown[i] = append(shown[i], name)
+				widths[2] = max(widths[2], len(name))
 			}
-			frame = append(frame, faint.Render("· "+name+"  "+action+"  "+waiting))
-		case progress.Done:
-			frame = append(frame, green.Render("✔")+" "+name+"  "+faint.Render(action+"  "+summary(view)+"  "+elapsed(view).String()))
-			frame = append(frame, warnings(view)...)
-		case progress.Error:
-			frame = append(frame, red.Render("✖")+" "+bold.Render(name)+"  "+action+"  "+red.Render(view.message))
-			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view, folded)...)
+		}
+	}
+	for i, view := range live.views.ordered {
+		frame = append(frame, rows[i].render(widths[0], widths[1]))
+		frame = append(frame, warnings(view)...)
+		frame = append(frame, services(view, shown[i], widths[2])...)
+		if view.state == progress.Error {
 			for _, line := range view.output {
 				if !view.repeats(line) {
 					frame = append(frame, faint.Render("    "+line))
 				}
 			}
-		default:
-			spinner := cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)])
-			frame = append(frame, spinner+" "+bold.Render(name)+"  "+action+"  "+doing(view)+faint.Render("  "+elapsed(view).String()))
-			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view, folded)...)
 		}
 	}
 	return frame
 }
 
-// doing is what an installation at work is at: its images, then its services.
-func doing(view *installationView) string {
-	switch {
-	case view.images.State == progress.Working:
-		return fmt.Sprintf("loading images %d/%d", view.images.Current, view.images.Total)
-	case len(view.services) > 0:
-		ready := 0
-		for _, task := range view.tasks {
-			if task.State == progress.Done {
-				ready++
-			}
+// tally counts the installations, and those done, at work, waiting and
+// failed, while some are not done.
+func (live *live) tally() string {
+	counts := map[progress.State]int{}
+	total := 0
+	for _, view := range live.views.ordered {
+		if view.kind == "" {
+			counts[view.state]++
+			total++
 		}
-		state := "ready"
-		if view.action == "uninstall" {
-			state = "removed"
-		}
-		return fmt.Sprintf("%d/%d services %s", ready, len(view.services), state)
 	}
-	return "starting"
+	parts := []string{plural(total, "installation")}
+	if counts[progress.Done] == total {
+		return parts[0]
+	}
+	waiting := "waiting"
+	if live.ended {
+		waiting = "not run"
+	}
+	for _, state := range []struct {
+		state progress.State
+		name  string
+	}{{progress.Done, "done"}, {progress.Working, "working"}, {progress.Error, "failed"}, {progress.Pending, waiting}} {
+		if counts[state.state] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[state.state], state.name))
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
-// services are the lines of the services of an installation, with their
-// tasks or containers counted: green once ready, cyan while Swarm verifies
-// that they stay up or Compose checks their health, yellow on their way,
-// red on failure. Folded, those ready are left out.
-func (live *live) services(view *installationView, folded bool) []string {
-	width := 0
-	for _, name := range view.services {
-		width = max(width, len(name))
+// frameRow is the line of an installation or of a shared object, its columns
+// as plain text, and how each shows.
+type frameRow struct {
+	icon                 string
+	name, action, detail string
+	// colored is the detail as it shows, when it has colors of its own.
+	colored                  string
+	elapsed                  string
+	nameStyle, actionStyle   lipgloss.Style
+	detailStyle, otherStyles lipgloss.Style
+}
+
+// row says where the installation or the shared object stands.
+func (live *live) row(view *installationView) frameRow {
+	line := frameRow{name: view.name, action: view.action, nameStyle: plain, actionStyle: faint, detailStyle: faint, otherStyles: faint}
+	if view.kind != "" {
+		line.action = view.kind
 	}
-	var rendered []string
-	for _, name := range slices.Sorted(slices.Values(view.services)) {
+	waiting := "waiting"
+	if live.ended {
+		waiting = "not run"
+	}
+	switch view.state {
+	case progress.Pending:
+		line.icon, line.nameStyle, line.detail = faint.Render("·"), faint, waiting
+		if view.kind != "" {
+			line.detail = view.users
+		}
+	case progress.Done:
+		line.icon, line.detail = green.Render("✔"), summary(view)
+		if view.kind != "" {
+			line.detail = sharedText(view)
+		} else {
+			line.elapsed = elapsed(view).String()
+		}
+	case progress.Error:
+		line.icon, line.nameStyle, line.actionStyle, line.detailStyle = red.Render("✖"), bold, plain, red
+		line.detail = view.message
+	default:
+		line.icon, line.nameStyle, line.actionStyle, line.detailStyle = cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)]), bold, plain, plain
+		if view.kind != "" {
+			line.detail = view.message
+		} else {
+			line.detail, line.colored = doing(view)
+			line.elapsed = elapsed(view).String()
+		}
+	}
+	return line
+}
+
+// render lines the row up: the name and the detail padded to the widths.
+func (line frameRow) render(nameWidth, detailWidth int) string {
+	text := line.icon + " " + line.nameStyle.Render(fmt.Sprintf("%-*s", nameWidth, line.name)) + "  " + line.actionStyle.Render(fmt.Sprintf("%-9s", line.action)) + "  "
+	detail := line.detailStyle.Render(line.detail)
+	if line.colored != "" {
+		detail = line.colored
+	}
+	if line.elapsed == "" {
+		return text + detail
+	}
+	return text + detail + strings.Repeat(" ", max(0, detailWidth-utf8.RuneCountInString(line.detail))) + "  " + line.otherStyles.Render(line.elapsed)
+}
+
+// sharedText is what became of a shared object, and how many share it.
+func sharedText(view *installationView) string {
+	if view.message == "" {
+		return view.users
+	}
+	return view.message + " · " + view.users
+}
+
+// inTrouble tells a service that needs looking at: failed, or restarted
+// by Swarm.
+func inTrouble(task progress.Event) bool {
+	return task.State == progress.Error || strings.HasPrefix(task.Message, "restarting")
+}
+
+// doing is what an installation at work is at: its images, then its
+// services, on a meter. It returns it as text, and as it shows.
+func doing(view *installationView) (string, string) {
+	if view.images.State == progress.Working {
+		loaded := int(view.images.Current)
+		cells, colored := meter([]int{loaded, int(view.images.Total) - loaded}, []lipgloss.Style{green, faint})
+		text := fmt.Sprintf("%d/%d images loaded", loaded, view.images.Total)
+		return cells + "  " + text, colored + "  " + text
+	}
+	total := max(view.expected, len(view.services))
+	if total == 0 {
+		return "starting", ""
+	}
+	// A square for each service, the color of its line: green ready, cyan
+	// verified or checked, yellow on its way, red failed, faint not there yet.
+	counts := make([]int, 5)
+	for _, name := range view.services {
 		task := view.tasks[name]
-		if folded && task.State == progress.Done {
+		switch {
+		case task.State == progress.Done:
+			counts[0]++
+		case task.Message == "verifying" || task.Message == "checking health":
+			counts[1]++
+		case task.State == progress.Error:
+			counts[3]++
+		default:
+			counts[2]++
+		}
+	}
+	counts[4] = total - len(view.services)
+	cells, colored := meter(counts, []lipgloss.Style{green, cyan, yellow, red, faint})
+	state := "services ready"
+	if view.action == "uninstall" {
+		state = "services removed"
+	}
+	text := fmt.Sprintf("%d/%d %s", counts[0], total, state)
+	return cells + "  " + text, colored + "  " + text
+}
+
+// meterWidth is how many squares a meter has at most: one for each of what
+// it counts, or each its share of them.
+const meterWidth = 10
+
+// meter draws the counts as squares, in the styles, the last one empty:
+// one square each up to meterWidth, else their shares, one square at least
+// for any count. The text is padded to meterWidth, for the columns after.
+func meter(counts []int, styles []lipgloss.Style) (string, string) {
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	squares := slices.Clone(counts)
+	if total > meterWidth {
+		squares = shares(counts, total)
+	}
+	var text, colored strings.Builder
+	for i, count := range squares {
+		if count == 0 {
 			continue
 		}
+		glyph := "▰"
+		if i == len(squares)-1 {
+			glyph = "▱"
+		}
+		text.WriteString(strings.Repeat(glyph, count))
+		colored.WriteString(styles[i].Render(strings.Repeat(glyph, count)))
+	}
+	padding := strings.Repeat(" ", max(0, meterWidth-utf8.RuneCountInString(text.String())))
+	return text.String() + padding, colored.String() + padding
+}
+
+// shares splits meterWidth squares among the counts, by largest remainder,
+// and gives one to any count that has none, from the largest share.
+func shares(counts []int, total int) []int {
+	squares := make([]int, len(counts))
+	remainders := make([]int, len(counts))
+	given := 0
+	for i, count := range counts {
+		squares[i], remainders[i] = count*meterWidth/total, count*meterWidth%total
+		given += squares[i]
+	}
+	for ; given < meterWidth; given++ {
+		largest := 0
+		for i := range remainders {
+			if remainders[i] > remainders[largest] {
+				largest = i
+			}
+		}
+		squares[largest]++
+		remainders[largest] = -1
+	}
+	for i, count := range counts {
+		if count > 0 && squares[i] == 0 {
+			squares[i]++
+			squares[slices.Index(squares, slices.Max(squares))]--
+		}
+	}
+	return squares
+}
+
+// services are the lines of the services named, of an installation, the
+// names padded to the width, their tasks or containers counted: green once
+// ready, cyan while Swarm verifies that they stay up or Compose checks
+// their health, yellow on their way, red on failure.
+func services(view *installationView, names []string, width int) []string {
+	var rendered []string
+	for _, name := range names {
+		task := view.tasks[name]
 		icon, style := "◌", yellow
 		switch {
 		case task.State == progress.Done:
@@ -435,4 +686,9 @@ func warnings(view *installationView) []string {
 		lines[i] = yellow.Render("    ! " + warning)
 	}
 	return lines
+}
+
+// words joins those that are not empty.
+func words(given ...string) string {
+	return strings.Join(slices.DeleteFunc(given, func(word string) bool { return word == "" }), " ")
 }

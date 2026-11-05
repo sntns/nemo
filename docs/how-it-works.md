@@ -34,18 +34,17 @@ sequenceDiagram
     participant gill
     You->>nemo: nemo up
     nemo->>nemo: read the manifest, locate the bundles,<br/>resolve dependencies, order them
-    loop each installation
+    nemo->>nemo: plan: each action, its credentials,<br/>what each project declares, what they share
+    par each installation
         nemo->>gill: validate: check the bundle against the target
     end
-    loop each installation, dependencies first
-        nemo->>nemo: plan: parameters, credential sources,<br/>what the last run recorded
+    par each installation, once its dependencies are done,<br/>a shared object's own installation before its users
         opt images: load
             nemo->>Docker: load the bundle's images
         end
         nemo->>Docker: start gill, with the socket,<br/>the bundle, parameters and credentials
-        gill->>Docker: networks, volumes, configs, secrets
+        gill->>Docker: volumes, networks, configs, secrets
         gill->>Docker: containers (Compose) or services (Swarm)
-        gill-->>nemo: progress events
         gill->>Docker: wait until the services run
         gill-->>nemo: result
         nemo->>nemo: record the run
@@ -53,30 +52,40 @@ sequenceDiagram
     nemo->>Docker: uninstall what the manifest no longer lists
 ```
 
-**Planning.** nemo reads the stack's manifest and locates each bundle: a file, a reference in a registry, or a version that the stack's `remote` turns into a location. It reads the bundles' dependencies, and finds those the stack does not list at the stack's remote, else in the registry they name, at the highest version their ranges allow. It orders the installations so that dependencies come first, and stops before touching anything if a dependency is missing or a range is not met.
+**Locating the bundles.** nemo reads the stack's manifest and locates each bundle: a file, a reference in a registry, or a version that the stack's `remote` turns into a location. It reads the bundles' dependencies, and finds those the stack does not list at the stack's remote, else in the registry they name, at the highest version their ranges allow. It orders the installations by level, dependencies first, and by name within a level, and stops before touching anything if a dependency is missing or a range is not met.
 
-**Each installation.** For each installation, in order:
+**Planning.** Then, still before anything is touched, nemo plans each installation's action:
 
 - The action is `install` if the bundle is not installed in the stack, `upgrade` if it is.
-- The parameters are the stack's and the installation's, over what the last run used, limited to those the bundle declares. Credentials are read from their sources now: a file, an environment variable, or the output of a command.
-- With `images: load`, nemo loads the bundle's images into the target's Docker, for its platform only. Each is tagged after its digest, so a new build is a new image.
+- The parameters are the stack's and the installation's, over what the last run used, limited to those the bundle declares. Credentials are read from their sources now, once: a file, an environment variable, or the output of a command. One that can't be read stops `nemo up` before anything runs.
+- nemo renders the installation's compose project with gill's own code, the action's parameters and credentials: it knows every network, volume, config and secret the installation will have on the target, under the name it will have there, and its services and published ports.
+
+The compose project of every installation is named after the stack, so two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, declare the same object. It is none of theirs, and does not depend on their services: nemo gives it an installation of its own, `network.NAME`, `volume.NAME`, `config.NAME` or `secret.NAME`. Its bundle declares the object alone, with no service, as the first installation that declares it does, with that bundle's gill and nemo-* parameters; a config's or a secret's content reaches it as a credential, never recorded. A network one installation declares otherwise than the first is made as the first declares it, with a warning. What can't be shared stops `nemo up` before anything runs: a service, or a published port, of two installations, and a volume two of them make with other options.
+
+**Each installation.** nemo checks every bundle that has a `validate` action first, all at once. Then each installation runs as soon as those it depends on are done, and the installations of the objects it shares: those come first, and the installations that share nothing don't wait for them. A shared object's installation runs again only when its declaration changes. Nothing else bounds how many run at once.
+
+- With `images: load`, nemo loads the bundle's images into the target's Docker, for its platform only. Each is tagged after its digest, so a new build is a new image. Only an install or an upgrade runs the services: the other actions load gill alone.
 - nemo starts gill on the target with the Docker socket mounted, the bundle, the parameters and the credentials, as the CNAB specification describes. It reads gill's events as they come, and shows them.
 - gill fills the compose project with the parameters, pins each image to its digest, and applies it with the orchestrator the target names:
-  - **Compose** creates the networks and volumes, then the containers, one level of `depends_on` at a time, waiting at each level for the condition the dependants ask for: started, healthy, or completed. A started or healthy container must then stay up for 5 seconds without the daemon restarting it, so that one that starts then exits is caught. A container whose configuration did not change is kept.
-  - **Swarm** creates the networks, volumes, configs and secrets, then creates or updates each service, waits until its tasks converge, and watches them for a moment to make sure they stay up. Configs and secrets are named after their content, so a change rolls the services that use them.
+  - **Compose** creates the volumes and networks, then the containers, one level of `depends_on` at a time, waiting at each level for the condition the dependants ask for: started, healthy, or completed. A started or healthy container must then stay up for 5 seconds without the daemon restarting it, so that one that starts then exits is caught. A container whose configuration did not change is kept.
+  - **Swarm** creates the volumes, networks, configs and secrets, then creates or updates each service, waits until its tasks converge, and watches them for a moment to make sure they stay up. Configs and secrets are named after their content, so a change rolls the services that use them.
+  - Both then remove what the installation no longer declares: its services, configs and secrets, and the networks it created, once nothing uses them.
 - nemo records the run: the claim (what ran, with which bundle and parameters), its result, and its outputs.
 
-`nemo up` stops at the first installation that fails, and shows gill's error. Then it uninstalls the installations of the stack that the manifest no longer lists, dependants first.
+Once an action fails, `nemo up` starts no other, lets those under way end, and shows gill's error. Otherwise it then uninstalls the installations of the stack that the manifest no longer lists, as `nemo down` does. One that shares a volume with an installation the stack keeps keeps its volumes, even with `--purge`.
+
+Nothing of this is in the bundles: a bundle is a CNAB bundle, which Porter or another CNAB runtime installs alone, its gill creating what it needs.
 
 ## Taking it down
 
-`nemo down` uninstalls every installation of the stack, dependants first, from nemo's records: it needs no manifest. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the installation's labels. An object with the same name that nemo did not create is left alone, with a warning. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept.
+`nemo down` uninstalls every installation of the stack from nemo's records: it needs no manifest. An installation goes once those that depend on it are gone, and a shared object's installation once its users are gone, several at once. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the stack's labels, and the configs and secrets its services used, once nothing else uses them. An object with the same name that nemo did not create is left alone, with a warning, and so is a shared object, which its own installation removes once its users are gone. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept; one nothing uses any more is removed once Swarm released it, which gill waits for, up to 30 seconds.
 
 ## Labels and ownership
 
 Everything gill creates carries labels: the stack, the bundle, the service, and a hash of its specification. They let nemo:
 
 - tell its own objects from any other on the same Docker, and refuse to take over a network, volume or service it did not create;
+- share what installations share: a network or a volume carries the stack's labels, which every installation of the stack uses, and the bundle's that created it, a shared object's own; a service, config or secret is its installation's;
 - keep what did not change on an upgrade, and recreate only what did;
 - read the status and the logs of a stack's services;
 - stay compatible with Docker's own tools: `docker compose ps` and `docker compose logs` see the containers gill creates, and `docker stack services` the services.
@@ -100,7 +109,7 @@ What runs on the target is described by the labels on the target. What was asked
 
 gill reports what it does as events: images loading, networks and volumes created, and each service's containers (Compose) or tasks (Swarm) counted as they start, pass their health check or are verified to stay up, and run. nemo renders them:
 
-- **in a terminal**, as a view redrawn in place: a line per installation, the services of the one at work unfolded;
+- **in a terminal**, as a view redrawn in place: a title that counts the installations done, at work and waiting, then a line per object installations share and a line per installation, in the stack's order, their columns lined up. An installation at work shows a meter of its services, a square each, up to ten, else each its share of them: green ready, cyan running while Swarm verifies it stays up or Compose checks its health, yellow on its way, red failed, empty not there yet. It unfolds only the services in trouble, failed or restarting: all of them when it is the only one at work, or with `--all`. One that failed unfolds them all, with gill's output;
 - **elsewhere**, a CI log for instance, as one line per change;
 - **with `--json`**, the records of the runs are also printed on standard output, for scripts.
 

@@ -77,7 +77,7 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 		switch {
 		case err != nil:
 			return found, err
-		case existing == nil:
+		case existing == nil, installer.HeldApart(project.Installation, existing.Labels, "networks", spec.Name):
 		case !docker.Owns(existing.Labels, want):
 			events.Emit(progress.Event{Group: "networks", Item: spec.Name, State: progress.Warning, Message: "kept: " + docker.NotOwned("network", spec.Name, want).Error()})
 		default:
@@ -94,7 +94,7 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 		switch {
 		case err != nil:
 			return found, err
-		case existing == nil:
+		case existing == nil, installer.HeldApart(project.Installation, existing.Labels, "volumes", spec.Name):
 		case !docker.Owns(existing.Labels, owner):
 			events.Emit(progress.Event{Group: "volumes", Item: spec.Name, State: progress.Warning, Message: "kept: " + docker.NotOwned("volume", spec.Name, owner).Error()})
 		default:
@@ -131,11 +131,15 @@ func (orchestrator *Orchestrator) deleteContainers(ctx context.Context, containe
 	return nil
 }
 
-// deleteNetworks deletes the networks. One another bundle of the stack still
-// uses is kept: the stack's last bundle removes it.
+// deleteNetworks deletes the networks. One a container still joins is kept:
+// the stack's last installation that uses it removes it.
 func (orchestrator *Orchestrator) deleteNetworks(ctx context.Context, networks []network.Summary, events progress.Sink) error {
 	for _, existing := range networks {
-		switch err := orchestrator.docker.NetworkDelete(ctx, &existing); {
+		joined := func(ctx context.Context) (bool, error) {
+			containers, err := orchestrator.docker.ContainerList(ctx, client.Filters{}.Add("network", existing.ID))
+			return len(containers) > 0, err
+		}
+		switch err := orchestrator.docker.NetworkRemove(ctx, &existing, joined); {
 		case err == nil:
 			events.Emit(progress.Event{Group: "networks", Item: existing.Name, State: progress.Done, Message: "removed"})
 		case docker.IsInUse(err):

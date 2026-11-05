@@ -199,6 +199,7 @@ func up() *cobra.Command {
 		name  string
 		purge bool
 		force bool
+		all   bool
 	)
 	command := &cobra.Command{
 		Use:   "up [INSTALLATION...]",
@@ -221,7 +222,7 @@ func up() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			events, stop := newRenderer(os.Stderr, loaded.Name+" · "+loaded.Target.Orchestrator)
+			events, stop := newRenderer(os.Stderr, loaded.Name+" · "+loaded.Target.Orchestrator, all)
 			result, err := api.Up(command.Context(), nemo.UpRequest{Stack: loaded, Only: arguments, Purge: purge, Progress: events})
 			return render(command, result, stop(err))
 		},
@@ -229,6 +230,7 @@ func up() *cobra.Command {
 	command.Flags().StringVarP(&file, "file", "f", "", "a stack's manifest, instead of a stack nemo keeps")
 	command.Flags().StringVar(&name, "stack", "", "a stack nemo keeps (default: the current one)")
 	command.Flags().BoolVar(&purge, "purge", false, "also remove the volumes of the bundles the stack no longer has")
+	command.Flags().BoolVarP(&all, "all", "a", false, "show the services of every installation at work, not only of those in trouble")
 	command.Flags().BoolVar(&force, "force", false, "write a stack another tool manages, Terraform: its next run undoes it")
 	command.Flags().Bool("json", false, "print the record of the runs as JSON on stdout")
 	return command
@@ -242,6 +244,7 @@ func down() *cobra.Command {
 		name  string
 		purge bool
 		force bool
+		all   bool
 	)
 	command := &cobra.Command{
 		Use:     "down",
@@ -264,7 +267,7 @@ func down() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			events, stop := newRenderer(os.Stderr, name)
+			events, stop := newRenderer(os.Stderr, name, all)
 			result, err := api.Down(command.Context(), nemo.DownRequest{Name: name, Manifest: manifest, Purge: purge, Progress: events})
 			return render(command, result, stop(err))
 		},
@@ -272,6 +275,7 @@ func down() *cobra.Command {
 	command.Flags().StringVarP(&file, "file", "f", "", "a stack's manifest")
 	command.Flags().StringVar(&name, "stack", "", "name of the stack (default: the current one)")
 	command.Flags().BoolVar(&purge, "purge", false, "also remove the volumes")
+	command.Flags().BoolVarP(&all, "all", "a", false, "show the services of every installation at work, not only of those in trouble")
 	command.Flags().BoolVar(&force, "force", false, "write a stack another tool manages, Terraform: its next run undoes it")
 	command.Flags().Bool("json", false, "print the record of the runs as JSON on stdout")
 	return command
@@ -351,7 +355,7 @@ func action(name, short, example string, call func(*nemo.Nemo, context.Context, 
 			if err != nil {
 				return err
 			}
-			events, stop := newRenderer(os.Stderr, request.Stack)
+			events, stop := newRenderer(os.Stderr, request.Stack, false)
 			request.Progress = events
 			run, err := call(api, command.Context(), request)
 			err = stop(err)

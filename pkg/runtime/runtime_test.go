@@ -4,15 +4,19 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/cnabio/cnab-go/bundle"
 	"github.com/cnabio/cnab-go/bundle/definition"
+	"github.com/opencontainers/go-digest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/target"
+	"github.com/sntns/nemo/pkg/transfer"
 )
 
 func testBundle(t *testing.T) cnab.ExtendedBundle {
@@ -149,4 +153,26 @@ users: [{name: test, user: {token: x}}]
 	require.NoError(t, err, "nothing is reached before the action runs")
 	_, err = newDriver(context.Background(), target.Target{Orchestrator: target.Compose, Configuration: target.Configuration{Host: "unix:///var/run/docker.sock"}}, kubernetes, testBundle(t))
 	require.ErrorContains(t, err, "reaches the target's Docker over tcp:// only")
+}
+
+// Only install and upgrade need the images of the services: the other
+// actions load the installer alone, and the installer gets the names the
+// others have once loaded.
+func TestNeeded(t *testing.T) {
+	t.Parallel()
+	bundle := cnab.ExtendedBundle{Bundle: bundle.Bundle{InvocationImages: []bundle.InvocationImage{{BaseImage: bundle.BaseImage{Image: "gill:dev"}}}}}
+	images := []transfer.Image{
+		{Name: "gill:dev", Digest: digest.Digest("sha256:" + strings.Repeat("1", 64))},
+		{Name: "busybox:1.37", Digest: digest.Digest("sha256:" + strings.Repeat("2", 64))},
+		{Name: "unpinned:latest"},
+	}
+	all, named := needed(Request{Bundle: bundle, Action: cnab.ActionUpgrade}, slices.Clone(images))
+	assert.Len(t, all, 3, "an upgrade runs the services")
+	assert.Empty(t, named)
+
+	alone, named := needed(Request{Bundle: bundle, Action: cnab.ActionUninstall}, slices.Clone(images))
+	assert.Equal(t, []string{"gill:dev", "unpinned:latest"}, []string{alone[0].Name, alone[1].Name}, "the installer, and an image nemo can't name without its digest")
+	loadedName, err := transfer.LoadedName("busybox:1.37", images[1].Digest)
+	require.NoError(t, err)
+	assert.Equal(t, loadedName, named["busybox:1.37"], "the name Load gives it")
 }

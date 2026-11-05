@@ -159,6 +159,11 @@ func (nemo *Nemo) act(ctx context.Context, action string, request ActionRequest,
 	if err != nil {
 		return Run{}, err
 	}
+	return nemo.perform(ctx, action, request, plan)
+}
+
+// perform runs the planned action, telling its installation's progress.
+func (nemo *Nemo) perform(ctx context.Context, action string, request ActionRequest, plan actionPlan) (Run, error) {
 	events := progress.About(progressOf(request.Progress), plan.stack+"/"+plan.bundle.Name)
 	working, done := progress.Event{Group: progress.Installation, State: progress.Working, Message: action}, progress.Event{Group: progress.Installation, State: progress.Done, Message: action}
 	if request.Validate {
@@ -196,20 +201,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		}
 		action = cnab.ActionValidate
 	}
-	override := plan.parameters[cnab.ParameterOverride]
-	if _, declared := plan.bundle.Parameters[cnab.ParameterOverride]; override != "" && !declared {
-		return Run{}, fmt.Errorf("the bundle %s was built by a nemo that can't take an override: build it again", plan.bundle.Name)
-	}
-	extended, err := credentials.WithOverride(plan.bundle, override)
-	if err != nil {
-		return Run{}, err
-	}
-	values, err := credentials.Resolve(plan.credentials, extended, action)
-	if err != nil {
-		return Run{}, err
-	}
-	given := slices.Sorted(maps.Keys(values))
-	if values, err = credentials.Pack(plan.bundle, extended, values); err != nil {
+	if err := plan.readCredentials(action); err != nil {
 		return Run{}, err
 	}
 	run, err := nemo.execute(ctx, runtime.Request{
@@ -219,7 +211,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Target:      nemo.reach(request.Stack, plan.target),
 		Installer:   plan.installer,
 		Parameters:  plan.parameters,
-		Credentials: values,
+		Credentials: plan.values,
 		Relocation:  plan.relocation,
 		Source:      plan.source,
 		Custom:      storage.RunCustom{Target: recordedTarget(plan.target), Installer: plan.installer, Credentials: credentials.Recorded(plan.credentials), RelocationMap: plan.relocation},
@@ -242,7 +234,7 @@ func (nemo *Nemo) run(ctx context.Context, action string, request ActionRequest,
 		Target:       recordedTarget(plan.target),
 		Driver:       plan.installer.DriverName(),
 		Parameters:   run.Claim.Parameters,
-		Credentials:  given,
+		Credentials:  plan.given,
 		Status:       run.Result.Status,
 		Started:      run.Claim.Created,
 		Ended:        run.Result.Created,
@@ -262,6 +254,37 @@ type actionPlan struct {
 	relocation  relocation.ImageRelocationMap
 	source      string
 	digest      string
+	// values are the credentials read from their sources, packed for the
+	// installer, and given their names, once read.
+	values valuesource.Set
+	given  []string
+	read   bool
+}
+
+// readCredentials reads the credentials of the action from their sources,
+// unless they were read already: a stack reads them all before it acts.
+func (plan *actionPlan) readCredentials(action string) error {
+	if plan.read {
+		return nil
+	}
+	override := plan.parameters[cnab.ParameterOverride]
+	if _, declared := plan.bundle.Parameters[cnab.ParameterOverride]; override != "" && !declared {
+		return fmt.Errorf("the bundle %s was built by a nemo that can't take an override: build it again", plan.bundle.Name)
+	}
+	extended, err := credentials.WithOverride(plan.bundle, override)
+	if err != nil {
+		return err
+	}
+	values, err := credentials.Resolve(plan.credentials, extended, action)
+	if err != nil {
+		return err
+	}
+	plan.given = slices.Sorted(maps.Keys(values))
+	if plan.values, err = credentials.Pack(plan.bundle, extended, values); err != nil {
+		return err
+	}
+	plan.read = true
+	return nil
 }
 
 // plan is what an action runs: its bundle, the request's, else the one of

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/cnabio/cnab-go/bundle"
@@ -25,6 +26,7 @@ import (
 
 // fakeRuntime records the requests and answers with a successful run.
 type fakeRuntime struct {
+	mutex    sync.Mutex
 	requests []runtime.Request
 	// failing names the bundles whose actions fail, as the installer's would.
 	failing map[string]bool
@@ -33,7 +35,9 @@ type fakeRuntime struct {
 }
 
 func (fake *fakeRuntime) execute(ctx context.Context, request runtime.Request) (runtime.Run, error) {
+	fake.mutex.Lock()
 	fake.requests = append(fake.requests, request)
+	fake.mutex.Unlock()
 	parameters := map[string]any{}
 	for name, value := range request.Parameters {
 		parameters[name] = value

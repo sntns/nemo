@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sntns/nemo/pkg/cnab"
+	"github.com/sntns/nemo/pkg/labels"
 	"github.com/sntns/nemo/pkg/progress"
 )
 
@@ -315,4 +316,15 @@ func TestRegistryAuth(t *testing.T) {
 	_, err = registryAuthOf(map[string]any{cnab.ParameterRegistryAuth: `{"ghcr.io":"s3cret"}`})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "s3cret", "the value never shows")
+}
+
+// An object nemo gave an installation of its own is that one's: the
+// installations that use it leave it alone.
+func TestHeldApart(t *testing.T) {
+	t.Parallel()
+	held := map[string]string{labels.Stack: "demo", labels.Bundle: "network.demo_mesh"}
+	assert.Equal(t, "network.demo_mesh", SharedInstallation("networks", "demo_mesh"))
+	assert.True(t, HeldApart(Installation{Stack: "demo", Bundle: "web"}, held, "networks", "demo_mesh"), "a user leaves it")
+	assert.False(t, HeldApart(Installation{Stack: "demo", Bundle: "network.demo_mesh"}, held, "networks", "demo_mesh"), "its own installation removes it")
+	assert.False(t, HeldApart(Installation{Stack: "demo", Bundle: "web"}, map[string]string{labels.Stack: "demo", labels.Bundle: "api"}, "networks", "demo_mesh"), "one another installation created is shared as it always was")
 }

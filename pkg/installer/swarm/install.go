@@ -298,8 +298,9 @@ func (orchestrator *Orchestrator) resolve(ctx context.Context, spec *swarm.Servi
 }
 
 // orphans returns what the installation runs that the project no longer
-// declares: the services of compose services it dropped, and the configs
-// and secrets of contents it no longer has.
+// declares: the services of compose services it dropped, the configs and
+// secrets of contents it no longer has, and the networks it created that it
+// no longer declares.
 func (orchestrator *Orchestrator) orphans(ctx context.Context, project *installer.Project, specs *projectSpecs) (objects, error) {
 	var found objects
 	selector := docker.ByInstallation(project.Installation)
@@ -334,5 +335,15 @@ func (orchestrator *Orchestrator) orphans(ctx context.Context, project *installe
 		}
 	}
 
+	// The networks it created: another installation that still uses one keeps it.
+	networks, err := orchestrator.docker.NetworkList(ctx, selector.Add("label", labels.Orchestrator+"="+Name))
+	if err != nil {
+		return found, err
+	}
+	for _, existing := range networks {
+		if !slices.ContainsFunc(specs.networks, func(spec docker.NetworkSpec) bool { return spec.Name == existing.Name }) {
+			found.networks = append(found.networks, existing)
+		}
+	}
 	return found, nil
 }

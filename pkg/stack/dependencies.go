@@ -1,50 +1,62 @@
 package stack
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
 	"github.com/sntns/nemo/pkg/cnab"
 )
 
-// Order sorts the bundles so that each comes after the bundles of the set
-// it depends on, with io.cnab.dependencies; otherwise their order is kept.
-// A dependency on a bundle outside the set does not order anything:
-// CheckDependencies reports it.
+// Order sorts the bundles by level: a bundle comes one level after the
+// deepest of the bundles of the set it depends on, with io.cnab.dependencies,
+// and those of a level come by name. A dependency on a bundle outside the set
+// does not order anything: CheckDependencies reports it.
 func Order(bundles []cnab.ExtendedBundle) ([]cnab.ExtendedBundle, error) {
-	var ordered []cnab.ExtendedBundle
-	placed := map[string]bool{}
+	inSet := map[string]bool{}
+	for _, bundle := range bundles {
+		inSet[bundle.Name] = true
+	}
+	level := map[string]int{}
 	remaining := bundles
 	for len(remaining) > 0 {
 		var rest []cnab.ExtendedBundle
-		progressed := false
+		placed := map[string]int{}
 		for _, bundle := range remaining {
-			ready := true
+			depth, ready := 0, true
 			for _, name := range DependencyNames(bundle) {
-				inSet := slices.ContainsFunc(bundles, func(other cnab.ExtendedBundle) bool { return other.Name == name })
-				if inSet && !placed[name] {
+				dependency, known := level[name]
+				switch {
+				case !inSet[name]:
+				case !known:
 					ready = false
+				default:
+					depth = max(depth, dependency+1)
 				}
 			}
 			if ready {
-				ordered = append(ordered, bundle)
-				placed[bundle.Name] = true
-				progressed = true
+				placed[bundle.Name] = depth
 			} else {
 				rest = append(rest, bundle)
 			}
 		}
-		if !progressed {
+		if len(placed) == 0 {
 			names := make([]string, len(rest))
 			for i, bundle := range rest {
 				names[i] = bundle.Name
 			}
 			return nil, fmt.Errorf("the dependencies of %s are a cycle", strings.Join(names, ", "))
 		}
+		maps.Copy(level, placed)
 		remaining = rest
 	}
+	ordered := slices.Clone(bundles)
+	slices.SortStableFunc(ordered, func(left, right cnab.ExtendedBundle) int {
+		return cmp.Or(cmp.Compare(level[left.Name], level[right.Name]), cmp.Compare(left.Name, right.Name))
+	})
 	return ordered, nil
 }
 

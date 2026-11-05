@@ -309,7 +309,7 @@ func (orchestrator *Orchestrator) copyFiles(ctx context.Context, id string, file
 }
 
 // orphans returns the containers of the services the project no longer
-// declares.
+// declares, and the networks it created that it no longer declares.
 func (orchestrator *Orchestrator) orphans(ctx context.Context, project *installer.Project, specs *projectSpecs) (objects, error) {
 	var found objects
 	containers, err := orchestrator.docker.ContainerList(ctx, docker.ByInstallation(project.Installation))
@@ -319,6 +319,16 @@ func (orchestrator *Orchestrator) orphans(ctx context.Context, project *installe
 	for _, summary := range containers {
 		if _, declared := specs.services[summary.Labels[labels.Service]]; !declared {
 			found.containers = append(found.containers, summary)
+		}
+	}
+	// Another installation that still uses one keeps it.
+	networks, err := orchestrator.docker.NetworkList(ctx, docker.ByInstallation(project.Installation).Add("label", labels.Orchestrator+"="+Name))
+	if err != nil {
+		return found, err
+	}
+	for _, existing := range networks {
+		if !slices.ContainsFunc(specs.networks, func(spec docker.NetworkSpec) bool { return spec.Name == existing.Name }) {
+			found.networks = append(found.networks, existing)
 		}
 	}
 	return found, nil

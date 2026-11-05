@@ -1,0 +1,22 @@
+x-nemo-bundle:
+  name: worker
+  dependencies:
+    requires:
+      broker:
+        bundle: bench/broker
+services:
+  worker:
+    image: busybox:1.37
+    # Beside api: on the same network, with the same secret, which the two share.
+    command: ["sh", "-c", "wget -q -O /dev/null http://broker:4222/hostname && grep -q s3cret /run/secrets/token || exit 1; exec sleep 3600"]
+    secrets: [token]
+    networks: [mesh]
+    deploy:
+      restart_policy:
+        condition: any
+        delay: 2s
+networks:
+  mesh: {}
+secrets:
+  token:
+    environment: API_TOKEN
