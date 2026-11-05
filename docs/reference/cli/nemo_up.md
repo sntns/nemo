@@ -18,6 +18,7 @@ nemo up [INSTALLATION...] [flags]
 ### Options
 
 ```
+  -a, --all            show the services of every installation at work, not only of those in trouble
   -f, --file string    a stack's manifest, instead of a stack nemo keeps
       --force          write a stack another tool manages, Terraform: its next run undoes it
   -h, --help           help for up

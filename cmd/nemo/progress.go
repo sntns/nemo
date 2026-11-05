@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -68,17 +69,6 @@ func (views *views) of(event progress.Event) *installationView {
 	view := &installationView{name: name, state: progress.Pending, tasks: map[string]progress.Event{}, objects: map[string]int{}}
 	views.ordered = append(views.ordered, view)
 	return view
-}
-
-// installations counts the rows of installations.
-func (views *views) installations() int {
-	count := 0
-	for _, view := range views.ordered {
-		if view.kind == "" {
-			count++
-		}
-	}
-	return count
 }
 
 // apply records the event, and returns the view it changed: none for an
@@ -189,12 +179,12 @@ func past(action string) string {
 // newRenderer returns the sink that shows the events on output, and the
 // function that ends it with the error of what it showed: a view redrawn in
 // place on a terminal, else a line for each change.
-func newRenderer(output *os.File, title string) (progress.Sink, func(error) error) {
+func newRenderer(output *os.File, title string, all bool) (progress.Sink, func(error) error) {
 	if !term.IsTerminal(int(output.Fd())) {
 		lines := &lines{output: output}
 		return lines, func(err error) error { return shown(err, &lines.mutex, &lines.views) }
 	}
-	live := &live{output: output, title: title, done: make(chan struct{}), stopped: make(chan struct{})}
+	live := &live{output: output, title: title, all: all, done: make(chan struct{}), stopped: make(chan struct{})}
 	_, _ = io.WriteString(output, "\033[?25l")
 	go live.run()
 	return live, func(err error) error {
@@ -276,9 +266,12 @@ func (lines *lines) Emit(event progress.Event) {
 
 // live redraws the installations in place, those at work unfolded.
 type live struct {
-	mutex   sync.Mutex
-	output  *os.File
-	title   string
+	mutex  sync.Mutex
+	output *os.File
+	title  string
+	// all shows the services of every installation at work, not only of
+	// the only one, or of those in trouble.
+	all     bool
 	views   views
 	drawn   int
 	frame   int
@@ -395,65 +388,143 @@ func wrap(line string, width int) []string {
 	return lines
 }
 
-// render returns the lines of the frame: a title, then a line for each
-// installation, and the services of those at work or failed; folded, the
+// render returns the lines of the frame: a title that counts the
+// installations by where they stand, then a line for each object
+// installations share and each installation, their columns lined up. An
+// installation at work shows its services only when it is the only one at
+// work, or all shows them, else those in trouble; one that failed shows them
+// all. Folded, the
 // services ready are left to their installation's count.
 func (live *live) render(folded bool) []string {
-	frame := []string{bold.Render(live.title) + faint.Render(" · "+plural(live.views.installations(), "installation")), ""}
-	width := 0
+	frame := []string{bold.Render(live.title) + faint.Render(" · "+live.tally()), ""}
+	working := 0
 	for _, view := range live.views.ordered {
-		width = max(width, len(view.name))
+		if view.kind == "" && view.state == progress.Working {
+			working++
+		}
 	}
-	for _, view := range live.views.ordered {
-		name := fmt.Sprintf("%-*s", width, view.name)
-		action := fmt.Sprintf("%-9s", view.action)
+
+	rows := make([]frameRow, len(live.views.ordered))
+	shown := make([][]string, len(live.views.ordered))
+	widths := [3]int{}
+	for i, view := range live.views.ordered {
+		rows[i] = live.row(view)
+		widths[0] = max(widths[0], len(view.name))
+		// Only the lines that end with a duration line it up.
+		if rows[i].elapsed != "" {
+			widths[1] = max(widths[1], utf8.RuneCountInString(rows[i].detail))
+		}
 		if view.kind != "" {
-			frame = append(frame, live.sharedLine(view, name))
-			frame = append(frame, warnings(view)...)
 			continue
 		}
-		switch view.state {
-		case progress.Pending:
-			waiting := "waiting"
-			if live.ended {
-				waiting = "not run"
+		for _, name := range slices.Sorted(slices.Values(view.services)) {
+			task := view.tasks[name]
+			unfold := view.state == progress.Error || view.state == progress.Working && (live.all || working == 1 || inTrouble(task))
+			if unfold && (!folded || task.State != progress.Done) {
+				shown[i] = append(shown[i], name)
+				widths[2] = max(widths[2], len(name))
 			}
-			frame = append(frame, faint.Render("· "+name+"  "+action+"  "+waiting))
-		case progress.Done:
-			frame = append(frame, green.Render("✔")+" "+name+"  "+faint.Render(action+"  "+summary(view)+"  "+elapsed(view).String()))
-			frame = append(frame, warnings(view)...)
-		case progress.Error:
-			frame = append(frame, red.Render("✖")+" "+bold.Render(name)+"  "+action+"  "+red.Render(view.message))
-			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view, folded)...)
+		}
+	}
+	for i, view := range live.views.ordered {
+		frame = append(frame, rows[i].render(widths[0], widths[1]))
+		frame = append(frame, warnings(view)...)
+		frame = append(frame, services(view, shown[i], widths[2])...)
+		if view.state == progress.Error {
 			for _, line := range view.output {
 				if !view.repeats(line) {
 					frame = append(frame, faint.Render("    "+line))
 				}
 			}
-		default:
-			spinner := cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)])
-			frame = append(frame, spinner+" "+bold.Render(name)+"  "+action+"  "+doing(view)+faint.Render("  "+elapsed(view).String()))
-			frame = append(frame, warnings(view)...)
-			frame = append(frame, live.services(view, folded)...)
 		}
 	}
 	return frame
 }
 
-// sharedLine is the line of an object installations share: what became of
-// it, and how many share it.
-func (live *live) sharedLine(view *installationView, name string) string {
-	kind := fmt.Sprintf("%-9s", view.kind)
+// tally counts the installations, and those done, at work, waiting and
+// failed, while some are not done.
+func (live *live) tally() string {
+	counts := map[progress.State]int{}
+	total := 0
+	for _, view := range live.views.ordered {
+		if view.kind == "" {
+			counts[view.state]++
+			total++
+		}
+	}
+	parts := []string{plural(total, "installation")}
+	if counts[progress.Done] == total {
+		return parts[0]
+	}
+	waiting := "waiting"
+	if live.ended {
+		waiting = "not run"
+	}
+	for _, state := range []struct {
+		state progress.State
+		name  string
+	}{{progress.Done, "done"}, {progress.Working, "working"}, {progress.Error, "failed"}, {progress.Pending, waiting}} {
+		if counts[state.state] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[state.state], state.name))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
+// frameRow is the line of an installation or of a shared object, its columns
+// as plain text, and how each shows.
+type frameRow struct {
+	icon                     string
+	name, action, detail     string
+	elapsed                  string
+	nameStyle, actionStyle   lipgloss.Style
+	detailStyle, otherStyles lipgloss.Style
+}
+
+// row says where the installation or the shared object stands.
+func (live *live) row(view *installationView) frameRow {
+	line := frameRow{name: view.name, action: view.action, nameStyle: plain, actionStyle: faint, detailStyle: faint, otherStyles: faint}
+	if view.kind != "" {
+		line.action = view.kind
+	}
+	waiting := "waiting"
+	if live.ended {
+		waiting = "not run"
+	}
 	switch view.state {
 	case progress.Pending:
-		return faint.Render("· " + name + "  " + kind + "  " + view.users)
+		line.icon, line.nameStyle, line.detail = faint.Render("·"), faint, waiting
+		if view.kind != "" {
+			line.detail = view.users
+		}
 	case progress.Done:
-		return green.Render("✔") + " " + name + "  " + faint.Render(kind+"  "+sharedText(view))
+		line.icon, line.detail = green.Render("✔"), summary(view)
+		if view.kind != "" {
+			line.detail = sharedText(view)
+		} else {
+			line.elapsed = elapsed(view).String()
+		}
 	case progress.Error:
-		return red.Render("✖") + " " + bold.Render(name) + "  " + kind + "  " + red.Render(view.message)
+		line.icon, line.nameStyle, line.actionStyle, line.detailStyle = red.Render("✖"), bold, plain, red
+		line.detail = view.message
+	default:
+		line.icon, line.nameStyle, line.actionStyle, line.detailStyle = cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)]), bold, plain, plain
+		if view.kind != "" {
+			line.detail = view.message
+		} else {
+			line.detail, line.elapsed = doing(view), elapsed(view).String()
+		}
 	}
-	return cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)]) + " " + bold.Render(name) + "  " + kind + "  " + view.message
+	return line
+}
+
+// render lines the row up: the name and the detail padded to the widths.
+func (line frameRow) render(nameWidth, detailWidth int) string {
+	text := line.icon + " " + line.nameStyle.Render(fmt.Sprintf("%-*s", nameWidth, line.name)) + "  " + line.actionStyle.Render(fmt.Sprintf("%-9s", line.action)) + "  "
+	if line.elapsed == "" {
+		return text + line.detailStyle.Render(line.detail)
+	}
+	return text + line.detailStyle.Render(fmt.Sprintf("%-*s", detailWidth, line.detail)) + "  " + line.otherStyles.Render(line.elapsed)
 }
 
 // sharedText is what became of a shared object, and how many share it.
@@ -464,11 +535,18 @@ func sharedText(view *installationView) string {
 	return view.message + " · " + view.users
 }
 
-// doing is what an installation at work is at: its images, then its services.
+// inTrouble tells a service that needs looking at: failed, or restarted
+// by Swarm.
+func inTrouble(task progress.Event) bool {
+	return task.State == progress.Error || strings.HasPrefix(task.Message, "restarting")
+}
+
+// doing is what an installation at work is at: its images, then its
+// services, counted on a meter.
 func doing(view *installationView) string {
 	switch {
 	case view.images.State == progress.Working:
-		return fmt.Sprintf("loading images %d/%d", view.images.Current, view.images.Total)
+		return fmt.Sprintf("%s  loading images %d/%d", meter(int(view.images.Current), int(view.images.Total)), view.images.Current, view.images.Total)
 	case len(view.services) > 0:
 		ready := 0
 		for _, task := range view.tasks {
@@ -480,26 +558,31 @@ func doing(view *installationView) string {
 		if view.action == "uninstall" {
 			state = "removed"
 		}
-		return fmt.Sprintf("%d/%d services %s", ready, len(view.services), state)
+		return fmt.Sprintf("%s  %d/%d services %s", meter(ready, len(view.services)), ready, len(view.services), state)
 	}
 	return "starting"
 }
 
-// services are the lines of the services of an installation, with their
-// tasks or containers counted: green once ready, cyan while Swarm verifies
-// that they stay up or Compose checks their health, yellow on their way,
-// red on failure. Folded, those ready are left out.
-func (live *live) services(view *installationView, folded bool) []string {
-	width := 0
-	for _, name := range view.services {
-		width = max(width, len(name))
+// meterWidth is how many cells a meter has, whatever it counts.
+const meterWidth = 10
+
+// meter shows how much of the total is done, on cells of the same width.
+func meter(done, total int) string {
+	filled := meterWidth
+	if total > 0 && done < total {
+		filled = done * meterWidth / total
 	}
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", meterWidth-filled)
+}
+
+// services are the lines of the services named, of an installation, the
+// names padded to the width, their tasks or containers counted: green once
+// ready, cyan while Swarm verifies that they stay up or Compose checks
+// their health, yellow on their way, red on failure.
+func services(view *installationView, names []string, width int) []string {
 	var rendered []string
-	for _, name := range slices.Sorted(slices.Values(view.services)) {
+	for _, name := range names {
 		task := view.tasks[name]
-		if folded && task.State == progress.Done {
-			continue
-		}
 		icon, style := "◌", yellow
 		switch {
 		case task.State == progress.Done:
