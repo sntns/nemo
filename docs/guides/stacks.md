@@ -200,11 +200,14 @@ nemo up -f deploy/shop.yaml       # a manifest nemo does not keep
 `nemo up` brings the target to the manifest:
 
 1. It locates every bundle, resolves the dependencies the stack does not list, and checks that every dependency's version satisfies the ranges its dependant accepts. Nothing is touched if one does not.
-2. It runs every bundle's `validate` action, with what it would install it with: gill checks the bundle against the target, such as a service name too long for Swarm or a compose option Swarm does not support, and changes nothing. Nothing is touched if one fails. A bundle built by nemo 0.2 or before can't be checked: it is checked when its turn comes, as it installs.
-3. It installs the installations that are not installed, and upgrades those that are, dependencies first. An upgrade with nothing changed is quick: gill keeps every container or service whose specification did not change.
-4. It uninstalls the installations of the stack that the manifest no longer lists, dependants first. Their volumes stay, unless `--purge`.
+2. It plans every installation: it reads its credentials, once, and renders its compose project to know what it declares on the target. Installations that declare the same network or volume, or the same Swarm config or secret, share it. Nothing is touched if two installations declare the same service or publish the same port, if they make one volume with other options, or if a credential can't be read.
+3. It runs every bundle's `validate` action, with what it would install it with: gill checks the bundle against the target, such as a service name too long for Swarm or a compose option Swarm does not support, and changes nothing. Nothing is touched if one fails. A bundle built by nemo 0.2 or before can't be checked: it is checked when its turn comes, as it installs.
+4. It installs the installations that are not installed, and upgrades those that are: each starts as soon as those it depends on are done, beside the others that can. Of the installations that share an object, the first in the stack's order creates it, and the others start once its installer announced it. An upgrade with nothing changed is quick: gill keeps every container or service whose specification did not change.
+5. It uninstalls the installations of the stack that the manifest no longer lists, dependants first, and the creator of a shared object after its other users. Their volumes stay, unless `--purge`; with it, a volume an installation the stack keeps still uses stays too.
 
-It stops at the first action that fails. Fix the cause, and run `nemo up` again: it starts over from the manifest.
+For example, in a stack whose five bundles `a` to `e` have no dependencies, where `a` and `b` share the network `shop_mesh`: `a`, `c`, `d` and `e` start together, `b` starts as soon as `a`'s installer created `shop_mesh`, and on `nemo down`, `a` goes once `b` is gone, and removes the network.
+
+Once an action fails, it starts no other, and lets those under way end. Fix the cause, and run `nemo up` again: it starts over from the manifest.
 
 ### One installation at a time
 

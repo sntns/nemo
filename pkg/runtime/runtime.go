@@ -251,6 +251,13 @@ func withOwnParameters(request Request, registryAuth string) (map[string]string,
 	return given, nil
 }
 
+// Parameters returns the value of every parameter that applies to the
+// request's action, as its installer will read them, but the registries'
+// credentials: what the installer renders its project with.
+func Parameters(request Request) (map[string]any, error) {
+	return parametersOf(request, "")
+}
+
 // parametersOf returns the value of every parameter that applies to the
 // action: the one given, converted to its definition's type, else its
 // default. The orchestrator and the volume types come from the target, and

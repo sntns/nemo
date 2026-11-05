@@ -30,17 +30,38 @@ type installationView struct {
 	objects  map[string]int
 	warnings []string
 	output   []string
+	// kind is set on the row of an object installations share, the stack's
+	// own: network, volume, config or secret; users says who shares it.
+	kind  string
+	users string
 }
 
-// views follows the installations in the order they appear.
+// views follows the installations, and the objects they share, in the
+// order they appear.
 type views struct {
 	ordered []*installationView
+	// shared are the rows of the objects installations share, by group and
+	// item: what an installation's installer says of one is the stack's row's.
+	shared map[string]*installationView
 }
 
-func (views *views) of(installation string) *installationView {
-	_, name, _ := strings.Cut(installation, "/")
+func (views *views) of(event progress.Event) *installationView {
+	if !strings.Contains(event.Installation, "/") && event.Item != "" {
+		key := event.Group + "/" + event.Item
+		if view, seen := views.shared[key]; seen {
+			return view
+		}
+		if views.shared == nil {
+			views.shared = map[string]*installationView{}
+		}
+		view := &installationView{name: event.Item, kind: strings.TrimSuffix(event.Group, "s"), state: progress.Pending}
+		views.shared[key] = view
+		views.ordered = append(views.ordered, view)
+		return view
+	}
+	_, name, _ := strings.Cut(event.Installation, "/")
 	for _, view := range views.ordered {
-		if view.name == name {
+		if view.kind == "" && view.name == name {
 			return view
 		}
 	}
@@ -49,9 +70,39 @@ func (views *views) of(installation string) *installationView {
 	return view
 }
 
-// apply records the event, and returns the view it changed.
+// installations counts the rows of installations.
+func (views *views) installations() int {
+	count := 0
+	for _, view := range views.ordered {
+		if view.kind == "" {
+			count++
+		}
+	}
+	return count
+}
+
+// apply records the event, and returns the view it changed: none for an
+// installation's event about an object it shares, which the stack's row
+// tells.
 func (views *views) apply(event progress.Event) *installationView {
-	view := views.of(event.Installation)
+	if _, sharedObject := views.shared[event.Group+"/"+event.Item]; sharedObject && strings.Contains(event.Installation, "/") {
+		return nil
+	}
+	view := views.of(event)
+	if view.kind != "" {
+		switch event.State {
+		case progress.Pending:
+			view.users = event.Message
+		case progress.Warning:
+			view.warnings = append(view.warnings, event.Message)
+		default:
+			view.state = event.State
+			if event.Message != "" {
+				view.message = event.Message
+			}
+		}
+		return view
+	}
 	switch {
 	case event.Group == progress.Installation:
 		view.state = event.State
@@ -180,8 +231,22 @@ func (lines *lines) Emit(event progress.Event) {
 	lines.mutex.Lock()
 	defer lines.mutex.Unlock()
 	view := lines.views.apply(event)
+	if view == nil {
+		return
+	}
 	say := func(format string, arguments ...any) {
 		fmt.Fprintf(lines.output, "%s: %s\n", view.name, fmt.Sprintf(format, arguments...))
+	}
+	if view.kind != "" {
+		switch event.State {
+		case progress.Done:
+			say("%s %s", view.kind, sharedText(view))
+		case progress.Warning:
+			say("warning: %s", event.Message)
+		case progress.Error:
+			say("%s failed: %s", view.kind, event.Message)
+		}
+		return
 	}
 	switch {
 	case event.Group == progress.Installation && event.State == progress.Working:
@@ -334,7 +399,7 @@ func wrap(line string, width int) []string {
 // installation, and the services of those at work or failed; folded, the
 // services ready are left to their installation's count.
 func (live *live) render(folded bool) []string {
-	frame := []string{bold.Render(live.title) + faint.Render(" · "+plural(len(live.views.ordered), "installation")), ""}
+	frame := []string{bold.Render(live.title) + faint.Render(" · "+plural(live.views.installations(), "installation")), ""}
 	width := 0
 	for _, view := range live.views.ordered {
 		width = max(width, len(view.name))
@@ -342,6 +407,11 @@ func (live *live) render(folded bool) []string {
 	for _, view := range live.views.ordered {
 		name := fmt.Sprintf("%-*s", width, view.name)
 		action := fmt.Sprintf("%-9s", view.action)
+		if view.kind != "" {
+			frame = append(frame, live.sharedLine(view, name))
+			frame = append(frame, warnings(view)...)
+			continue
+		}
 		switch view.state {
 		case progress.Pending:
 			waiting := "waiting"
@@ -369,6 +439,29 @@ func (live *live) render(folded bool) []string {
 		}
 	}
 	return frame
+}
+
+// sharedLine is the line of an object installations share: what became of
+// it, and how many share it.
+func (live *live) sharedLine(view *installationView, name string) string {
+	kind := fmt.Sprintf("%-9s", view.kind)
+	switch view.state {
+	case progress.Pending:
+		return faint.Render("· " + name + "  " + kind + "  " + view.users)
+	case progress.Done:
+		return green.Render("✔") + " " + name + "  " + faint.Render(kind+"  "+sharedText(view))
+	case progress.Error:
+		return red.Render("✖") + " " + bold.Render(name) + "  " + kind + "  " + red.Render(view.message)
+	}
+	return cyan.Render(spinnerFrames[live.frame%len(spinnerFrames)]) + " " + bold.Render(name) + "  " + kind + "  " + view.message
+}
+
+// sharedText is what became of a shared object, and how many share it.
+func sharedText(view *installationView) string {
+	if view.message == "" {
+		return view.users
+	}
+	return view.message + " · " + view.users
 }
 
 // doing is what an installation at work is at: its images, then its services.

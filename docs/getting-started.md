@@ -103,11 +103,12 @@ nemo up
 ```console
 hello · compose · 2 installations
 
-✔ nginx   install    1 service · 1 volume · 1 network  3.6s
-✔ whoami  install    1 service · 1 network  2.6s
+✔ hello_default  network    shared by 2 installations
+✔ nginx          install    1 service · 1 volume  3.6s
+✔ whoami         install    1 service  2.6s
 ```
 
-nemo installed `nginx` first, because `whoami` requires it. For each one, it loaded the images into your Docker and started gill, the installer. gill created the network and the volume, then the container with its page and its token, and waited until it ran.
+nemo installed `nginx` first, because `whoami` requires it. For each one, it loaded the images into your Docker and started gill, the installer. gill created the volume, then the container with its page and its token, and waited until it ran. The two bundles name no network, so their services join the project's default one, `hello_default`: the same network for both, which has a line of its own. `nginx`'s installer created it, being first; it is also the last to go, on `nemo down`.
 
 ```console
 $ curl localhost:8080

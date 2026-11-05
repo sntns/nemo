@@ -87,6 +87,9 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 	if found.secrets, err = orchestrator.declaredSecrets(ctx, project); err != nil {
 		return found, err
 	}
+	if err = orchestrator.referenced(ctx, project, &found); err != nil {
+		return found, err
+	}
 	if found.networks, err = orchestrator.declaredNetworks(ctx, project, specs, events); err != nil {
 		return found, err
 	}
@@ -194,6 +197,52 @@ func (orchestrator *Orchestrator) declaredVolumes(ctx context.Context, project *
 	return found, nil
 }
 
+// referenced adds the configs and secrets the services use, that the stack
+// created and the project does not take from outside. They are named after
+// their content, so another installation of the stack may have created one
+// of the same name and content: whichever uses it last removes it.
+func (orchestrator *Orchestrator) referenced(ctx context.Context, project *installer.Project, found *objects) error {
+	external := map[string]bool{}
+	for _, config := range project.Compose.Configs {
+		external[config.Name] = external[config.Name] || bool(config.External)
+	}
+	for _, secret := range project.Compose.Secrets {
+		external[secret.Name] = external[secret.Name] || bool(secret.External)
+	}
+	want := stackLabels(project.Installation)
+	for _, service := range found.services {
+		spec := service.Spec.TaskTemplate.ContainerSpec
+		if spec == nil {
+			continue
+		}
+		for _, reference := range spec.Configs {
+			if external[reference.ConfigName] || slices.ContainsFunc(found.configs, func(config swarm.Config) bool { return config.Spec.Name == reference.ConfigName }) {
+				continue
+			}
+			config, err := orchestrator.docker.ConfigFind(ctx, reference.ConfigName)
+			if err != nil {
+				return err
+			}
+			if config != nil && docker.Owns(config.Spec.Labels, want) {
+				found.configs = append(found.configs, *config)
+			}
+		}
+		for _, reference := range spec.Secrets {
+			if external[reference.SecretName] || slices.ContainsFunc(found.secrets, func(secret swarm.Secret) bool { return secret.Spec.Name == reference.SecretName }) {
+				continue
+			}
+			secret, err := orchestrator.docker.SecretFind(ctx, reference.SecretName)
+			if err != nil {
+				return err
+			}
+			if secret != nil && docker.Owns(secret.Spec.Labels, want) {
+				found.secrets = append(found.secrets, *secret)
+			}
+		}
+	}
+	return nil
+}
+
 // deleteServices deletes the services, and waits until their containers
 // are gone: each service is stopping until then, and removed once none of
 // its containers is left.
@@ -291,11 +340,11 @@ func (orchestrator *Orchestrator) deleteSecrets(ctx context.Context, secrets []s
 	return nil
 }
 
-// deleteNetworks deletes the networks. One another bundle of the stack still
-// uses is kept: the stack's last bundle removes it.
+// deleteNetworks deletes the networks. One a service still uses is kept: the
+// stack's last installation that uses it removes it.
 func (orchestrator *Orchestrator) deleteNetworks(ctx context.Context, networks []network.Summary, events progress.Sink) error {
 	for _, existing := range networks {
-		switch err := orchestrator.docker.NetworkDelete(ctx, &existing); {
+		switch err := orchestrator.docker.NetworkRemove(ctx, &existing, orchestrator.servicesOn(existing)); {
 		case err == nil:
 			events.Emit(progress.Event{Group: "networks", Item: existing.Name, State: progress.Done, Message: "removed"})
 		case docker.IsInUse(err):
@@ -321,4 +370,19 @@ func (orchestrator *Orchestrator) deleteVolumes(ctx context.Context, volumes []*
 		}
 	}
 	return nil
+}
+
+// servicesOn tells whether a service still uses the network, by its spec.
+func (orchestrator *Orchestrator) servicesOn(existing network.Summary) func(context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		services, err := orchestrator.docker.ServiceList(ctx, client.Filters{})
+		if err != nil {
+			return false, err
+		}
+		return slices.ContainsFunc(services, func(service swarm.Service) bool {
+			return slices.ContainsFunc(service.Spec.TaskTemplate.Networks, func(attachment swarm.NetworkAttachmentConfig) bool {
+				return attachment.Target == existing.ID || attachment.Target == existing.Name
+			})
+		}), nil
+	}
 }

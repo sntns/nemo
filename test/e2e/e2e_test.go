@@ -1,7 +1,7 @@
 //go:build integration
 
 // Package e2e runs nemo as its users do: it builds bundles with gill built
-// from this tree, imports a stack of three bundles that depend on one
+// from this tree, imports a stack of four bundles that depend on one
 // another, and brings it up and down with the nemo command.
 package e2e
 
@@ -38,9 +38,10 @@ var work string
 // of the stack that works: localhost:PORT.
 var registry string
 
-// bundles are the fixture bundles of a stack that works, each requiring the
-// one before it.
-var bundles = []string{"broker", "api", "web"}
+// bundles are the fixture bundles of a stack that works: api and worker
+// require broker, web requires api. All four share a network, and on Swarm
+// api and worker share their secret.
+var bundles = []string{"broker", "api", "web", "worker"}
 
 // fixtures are every bundle of testdata: those, one validate refuses on
 // Swarm, and one that never starts.
@@ -330,8 +331,13 @@ func TestStack_upAndDown(t *testing.T) {
 			port := freePort(t)
 			s.importManifest(orchestrator, port, bundles...)
 
-			_, err := s.nemo("up")
+			output, err := s.nemo("up")
 			require.NoError(t, err)
+			assert.Contains(t, output, s.name+"_mesh: network", "the network the four share has a line of its own")
+			assert.Contains(t, output, "shared by 4 installations")
+			if orchestrator == "swarm" {
+				assert.Contains(t, output, "shared by 2 installations", "api's and worker's secret")
+			}
 
 			assert.EventuallyWithT(t, func(c *assert.CollectT) {
 				status, body, err := get(t, port)

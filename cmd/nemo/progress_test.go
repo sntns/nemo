@@ -171,3 +171,37 @@ func TestLive_fitsTheTerminal(t *testing.T) {
 	live.ended = true
 	assert.Len(t, live.lines(80, 14), 27, "the last frame whole")
 }
+
+// A network two installations share has a row of its own, which its
+// creator's events fill; the installations' rows don't count it.
+func TestLive_shared(t *testing.T) {
+	t.Parallel()
+	live := &live{title: "demo · swarm"}
+	stack, alpha, bravo := progress.About(live, "demo"), progress.About(live, "demo/alpha"), progress.About(live, "demo/bravo")
+	stack.Emit(progress.Event{Group: "networks", Item: "demo_mesh", State: progress.Pending, Message: "shared by 2 installations"})
+	stack.Emit(progress.Event{Group: "networks", Item: "demo_mesh", State: progress.Warning, Message: "bravo declares it otherwise than alpha, which creates it as it declares it"})
+	for _, installation := range []progress.Sink{alpha, bravo} {
+		installation.Emit(progress.Event{Group: progress.Installation, State: progress.Pending, Message: "install"})
+	}
+	for _, installation := range []progress.Sink{alpha, bravo} {
+		installation.Emit(progress.Event{Group: progress.Installation, State: progress.Working, Message: "install"})
+		installation.Emit(progress.Event{Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"})
+		installation.Emit(progress.Event{Group: "services", Item: "web", State: progress.Done, Message: "running"})
+		installation.Emit(progress.Event{Group: progress.Installation, State: progress.Done, Message: "install"})
+	}
+	stack.Emit(progress.Event{Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"})
+	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(false), "\n")), "D")
+	assert.Equal(t, `demo · swarm · 2 installations
+
+✔ demo_mesh  network    created · shared by 2 installations
+    ! bravo declares it otherwise than alpha, which creates it as it declares it
+✔ alpha      install    1 service  D
+✔ bravo      install    1 service  D`, frame)
+
+	var output bytes.Buffer
+	lines := &lines{output: &output}
+	lines.Emit(progress.Event{Installation: "demo", Group: "networks", Item: "demo_mesh", State: progress.Pending, Message: "shared by 2 installations"})
+	lines.Emit(progress.Event{Installation: "demo/alpha", Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"})
+	lines.Emit(progress.Event{Installation: "demo", Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"})
+	assert.Equal(t, "demo_mesh: network created · shared by 2 installations\n", output.String(), "said once, on its own line")
+}

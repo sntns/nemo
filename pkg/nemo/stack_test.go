@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/cnabio/cnab-go/bundle"
 	"github.com/cnabio/cnab-go/bundle/definition"
@@ -277,8 +279,12 @@ func TestUp_stackCredentials(t *testing.T) {
 	_, err := nemo.Up(context.Background(), UpRequest{Stack: demo})
 	require.NoError(t, err)
 	require.Len(t, fake.requests, 2)
-	assert.Equal(t, valuesource.Set{"token": "s3cret"}, fake.requests[0].Credentials, "the stack's credentials its bundle declares")
-	assert.Empty(t, fake.requests[1].Credentials, "none for a bundle that declares none")
+	given := map[string]valuesource.Set{}
+	for _, request := range fake.requests {
+		given[request.Bundle.Name] = request.Credentials
+	}
+	assert.Equal(t, valuesource.Set{"token": "s3cret"}, given["nginx"], "the stack's credentials its bundle declares")
+	assert.Empty(t, given["database"], "none for a bundle that declares none")
 }
 
 func TestUpResolvesADependencyFromTheRemote(t *testing.T) {
@@ -456,7 +462,7 @@ func TestUpChecksEveryBundleFirst(t *testing.T) {
 	fake.failing = map[string]bool{"web": true}
 	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
 	require.Error(t, err)
-	assert.Equal(t, []string{"validate database", "validate web"}, actions(0), "a check that fails stops up before it installs anything")
+	assert.ElementsMatch(t, []string{"validate database", "validate web"}, actions(0), "a check that fails stops up before it installs anything")
 	installations, _ := nemo.Installations(ctx, "demo")
 	assert.Empty(t, installations, "a check records nothing")
 
@@ -535,4 +541,53 @@ func TestUpGivesTheOverride(t *testing.T) {
 	demo.Installations[2].Override = "- not a document"
 	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
 	require.ErrorContains(t, err, "cache: override: a compose document", "checked when the stack is read")
+}
+
+// Up runs side by side the bundles that do not depend on each other, and a
+// bundle once those it depends on are done; after a failure, it starts no
+// other but lets those under way end.
+func TestUpInParallel(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	directory := filepath.Dir(bundleFile)
+	demo := stack.Stack{
+		Name:   "demo",
+		Target: target.Target{Orchestrator: target.Compose},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: writeBundle(t, directory, "web", "database", "cache")}},
+			{Name: "database", Bundle: storage.BundleReference{File: writeBundle(t, directory, "database")}},
+			{Name: "cache", Bundle: storage.BundleReference{File: writeBundle(t, directory, "cache")}},
+		},
+	}
+	// database and cache each wait for the other to start: run one after the other, they would never end.
+	var both sync.WaitGroup
+	both.Add(2)
+	nemo.execute = func(ctx context.Context, request runtime.Request) (runtime.Run, error) {
+		if request.Bundle.Name != "web" {
+			both.Done()
+			both.Wait()
+		}
+		return fake.execute(ctx, request)
+	}
+	finished := make(chan error)
+	go func() { _, err := nemo.Up(context.Background(), UpRequest{Stack: demo}); finished <- err }()
+	select {
+	case err := <-finished:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("database and cache did not run side by side")
+	}
+	require.Len(t, fake.requests, 3)
+	assert.Equal(t, "web", fake.last().Bundle.Name, "web waits for both")
+
+	nemo.execute = fake.execute
+	fake.failing = map[string]bool{"database": true}
+	before := len(fake.requests)
+	_, err := nemo.Up(context.Background(), UpRequest{Stack: demo})
+	require.Error(t, err)
+	var actions []string
+	for _, request := range fake.requests[before:] {
+		actions = append(actions, request.Action+" "+request.Bundle.Name)
+	}
+	assert.ElementsMatch(t, []string{"upgrade database", "upgrade cache"}, actions, "the cache ends, web does not start")
 }

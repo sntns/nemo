@@ -93,7 +93,7 @@ nemo keeps stacks by name in its home, and one of them is the current stack, whi
 
 ## Installation
 
-An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created.
+An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created. Two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, share that one object: the first of them in the stack's order creates it, and removes it once the others are gone.
 
 nemo keeps a record of each installation, as the CNAB specification describes it:
 
@@ -109,6 +109,6 @@ nemo keeps a record of each installation, as the CNAB specification describes it
 |---|---|
 | `nemo bundle build` | Makes a bundle from a compose file, and publishes it with its images |
 | `nemo stack create` or `nemo stack import` | Keeps a stack's manifest, and makes it the current stack |
-| `nemo up` | Installs and upgrades the stack's bundles on its target, dependencies first, and uninstalls the ones removed from it |
+| `nemo up` | Installs and upgrades the stack's bundles on its target, dependencies first and in parallel, and uninstalls the ones removed from it |
 | `nemo status`, `nemo logs` | Reads the services of the stack's installations on the target |
-| `nemo down` | Uninstalls the stack, dependants first |
+| `nemo down` | Uninstalls the stack, dependants first and in parallel |

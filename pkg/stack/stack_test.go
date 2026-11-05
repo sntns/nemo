@@ -133,6 +133,21 @@ func TestOrder(t *testing.T) {
 	}
 	assert.Equal(t, []string{"cache", "database", "web"}, names, "a dependency outside the set orders nothing")
 
+	onWeb := map[string]cnab.Dependency{"web": {Bundle: "registry.example.com/bundles/web:1.0.0"}}
+	ordered, err = Order([]cnab.ExtendedBundle{
+		testBundle(t, "worker", "1.0.0", onDatabase),
+		testBundle(t, "proxy", "1.0.0", onWeb),
+		testBundle(t, "web", "1.0.0", onDatabase),
+		testBundle(t, "database", "1.0.0", nil),
+		testBundle(t, "broker", "1.0.0", nil),
+	})
+	require.NoError(t, err)
+	names = nil
+	for _, bundle := range ordered {
+		names = append(names, bundle.Name)
+	}
+	assert.Equal(t, []string{"broker", "database", "web", "worker", "proxy"}, names, "by level, then by name")
+
 	_, err = Order([]cnab.ExtendedBundle{
 		testBundle(t, "database", "1.0.0", map[string]cnab.Dependency{"web": {Bundle: "web"}}),
 		testBundle(t, "web", "1.0.0", onDatabase),

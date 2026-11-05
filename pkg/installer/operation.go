@@ -216,6 +216,10 @@ func (container Container) deliver(location *bundle.Location) (string, bool, err
 
 // readFile reads an absolute path of the container.
 func (container Container) readFile(path string) ([]byte, error) {
+	// An operation built outside the invocation image, to see what it declares, has no files.
+	if container.FS == nil {
+		return nil, fmt.Errorf("reading %s: %w", path, fs.ErrNotExist)
+	}
 	data, err := fs.ReadFile(container.FS, strings.TrimPrefix(path, "/"))
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)

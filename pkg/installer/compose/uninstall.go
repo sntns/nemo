@@ -131,11 +131,15 @@ func (orchestrator *Orchestrator) deleteContainers(ctx context.Context, containe
 	return nil
 }
 
-// deleteNetworks deletes the networks. One another bundle of the stack still
-// uses is kept: the stack's last bundle removes it.
+// deleteNetworks deletes the networks. One a container still joins is kept:
+// the stack's last installation that uses it removes it.
 func (orchestrator *Orchestrator) deleteNetworks(ctx context.Context, networks []network.Summary, events progress.Sink) error {
 	for _, existing := range networks {
-		switch err := orchestrator.docker.NetworkDelete(ctx, &existing); {
+		joined := func(ctx context.Context) (bool, error) {
+			containers, err := orchestrator.docker.ContainerList(ctx, client.Filters{}.Add("network", existing.ID))
+			return len(containers) > 0, err
+		}
+		switch err := orchestrator.docker.NetworkRemove(ctx, &existing, joined); {
 		case err == nil:
 			events.Emit(progress.Event{Group: "networks", Item: existing.Name, State: progress.Done, Message: "removed"})
 		case docker.IsInUse(err):
