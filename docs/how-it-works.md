@@ -78,7 +78,7 @@ Nothing of this is in the bundles: a bundle is a CNAB bundle, which Porter or an
 
 ## Taking it down
 
-`nemo down` uninstalls every installation of the stack from nemo's records: it needs no manifest. An installation goes once those that depend on it are gone, and a shared object's installation once its users are gone, several at once. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the stack's labels, and the configs and secrets its services used, once nothing else uses them. An object with the same name that nemo did not create is left alone, with a warning. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept: the last installation that uses it removes it, and waits for Swarm to release it, up to 30 seconds.
+`nemo down` uninstalls every installation of the stack from nemo's records: it needs no manifest. An installation goes once those that depend on it are gone, and a shared object's installation once its users are gone, several at once. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the stack's labels, and the configs and secrets its services used, once nothing else uses them. An object with the same name that nemo did not create is left alone, with a warning, and so is a shared object, which its own installation removes once its users are gone. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept; one nothing uses any more is removed once Swarm released it, which gill waits for, up to 30 seconds.
 
 ## Labels and ownership
 

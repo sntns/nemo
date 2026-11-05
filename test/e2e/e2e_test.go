@@ -360,8 +360,9 @@ func TestStack_upAndDown(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, before, s.versions(), "nemo up again changed the stack")
 
-			_, err = s.nemo("down", "--purge")
+			output, err = s.nemo("down", "--purge")
 			require.NoError(t, err)
+			assert.Contains(t, output, s.name+"_mesh: network removed", "by its own installation, once the four are gone")
 			s.assertNothingLeft()
 			_, err = s.nemo("down", "--purge")
 			assert.NoError(t, err, "a stack already down")

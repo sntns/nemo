@@ -280,7 +280,7 @@ func usersText(shared sharedObject) string {
 
 // node names the installation of the object: network.NAME, volume.NAME…
 func (shared sharedObject) node() string {
-	return strings.TrimSuffix(shared.group, "s") + "." + shared.name
+	return installer.SharedInstallation(shared.group, shared.name)
 }
 
 // sharedMark marks the compose project of an object's own installation.

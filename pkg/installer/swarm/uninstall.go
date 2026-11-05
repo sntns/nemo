@@ -175,7 +175,7 @@ func (orchestrator *Orchestrator) declaredNetworks(ctx context.Context, project 
 		if err != nil {
 			return nil, err
 		}
-		if existing != nil && ours(events, "networks", "network", spec.Name, existing.Labels, want) {
+		if existing != nil && !installer.HeldApart(project.Installation, existing.Labels, "networks", spec.Name) && ours(events, "networks", "network", spec.Name, existing.Labels, want) {
 			found = append(found, *existing)
 		}
 	}
@@ -190,7 +190,7 @@ func (orchestrator *Orchestrator) declaredVolumes(ctx context.Context, project *
 		if err != nil {
 			return nil, err
 		}
-		if existing != nil && ours(events, "volumes", "volume", spec.Name, existing.Labels, owner) {
+		if existing != nil && !installer.HeldApart(project.Installation, existing.Labels, "volumes", spec.Name) && ours(events, "volumes", "volume", spec.Name, existing.Labels, owner) {
 			found = append(found, existing)
 		}
 	}
@@ -223,7 +223,7 @@ func (orchestrator *Orchestrator) referenced(ctx context.Context, project *insta
 			if err != nil {
 				return err
 			}
-			if config != nil && docker.Owns(config.Spec.Labels, want) {
+			if config != nil && docker.Owns(config.Spec.Labels, want) && !installer.HeldApart(project.Installation, config.Spec.Labels, "configs", config.Spec.Name) {
 				found.configs = append(found.configs, *config)
 			}
 		}
@@ -235,7 +235,7 @@ func (orchestrator *Orchestrator) referenced(ctx context.Context, project *insta
 			if err != nil {
 				return err
 			}
-			if secret != nil && docker.Owns(secret.Spec.Labels, want) {
+			if secret != nil && docker.Owns(secret.Spec.Labels, want) && !installer.HeldApart(project.Installation, secret.Spec.Labels, "secrets", secret.Spec.Name) {
 				found.secrets = append(found.secrets, *secret)
 			}
 		}

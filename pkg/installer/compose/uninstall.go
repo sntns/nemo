@@ -77,7 +77,7 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 		switch {
 		case err != nil:
 			return found, err
-		case existing == nil:
+		case existing == nil, installer.HeldApart(project.Installation, existing.Labels, "networks", spec.Name):
 		case !docker.Owns(existing.Labels, want):
 			events.Emit(progress.Event{Group: "networks", Item: spec.Name, State: progress.Warning, Message: "kept: " + docker.NotOwned("network", spec.Name, want).Error()})
 		default:
@@ -94,7 +94,7 @@ func (orchestrator *Orchestrator) declared(ctx context.Context, project *install
 		switch {
 		case err != nil:
 			return found, err
-		case existing == nil:
+		case existing == nil, installer.HeldApart(project.Installation, existing.Labels, "volumes", spec.Name):
 		case !docker.Owns(existing.Labels, owner):
 			events.Emit(progress.Event{Group: "volumes", Item: spec.Name, State: progress.Warning, Message: "kept: " + docker.NotOwned("volume", spec.Name, owner).Error()})
 		default:
