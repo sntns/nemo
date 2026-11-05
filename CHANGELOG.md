@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.12.0](https://github.com/sntns/nemo/compare/v0.11.0...v0.12.0) (2026-11-05)
+
+
+### Features
+
+* a compact live view, with --all for every service ([c0a6d06](https://github.com/sntns/nemo/commit/c0a6d0667ce4708733db8125cc05552fa6834304))
+* give each object installations share an installation of its own ([8e1dbf0](https://github.com/sntns/nemo/commit/8e1dbf0950a68211cacf2f65dea009b3fa8f382d))
+* load gill alone for the actions that run no service, with no cap ([70a5183](https://github.com/sntns/nemo/commit/70a5183649bfeab5748dfebdadcc22609e907bcc))
+* plan a stack before acting, and run its installations in parallel ([32f851e](https://github.com/sntns/nemo/commit/32f851e11b7c5ce3a53cf108fea96d729d4a585a))
+* plan a stack before acting, and run its installations in parallel ([1f80396](https://github.com/sntns/nemo/commit/1f80396fbf328c059a55f6f2c717267c5e119235))
+
+
+### Bug Fixes
+
+* a square of the meter for each service, the color of its line ([c46a4e6](https://github.com/sntns/nemo/commit/c46a4e6857b611d19e274d996d9de738f3397b76))
+* color the meters of the compact view ([314ff8f](https://github.com/sntns/nemo/commit/314ff8fa51c394d480a497086b942c7f8a79b920))
+* declare a shared config or secret without labels when it has none ([8a76b9c](https://github.com/sntns/nemo/commit/8a76b9c674bb8742fbd5f3f90411bb154c9ba405))
+* leave a shared object to its own installation ([ac30f2d](https://github.com/sntns/nemo/commit/ac30f2db1479c1ab7769fc87c25cbc92f78fdc37))
+* show and start a down in the order its installations go ([934210b](https://github.com/sntns/nemo/commit/934210b57345310bdf8749c6701080d91aaf68ac))
+
 ## [0.11.0](https://github.com/sntns/nemo/compare/v0.10.0...v0.11.0) (2026-11-02)
 
 
