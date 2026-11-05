@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.12.1](https://github.com/sntns/nemo/compare/v0.12.0...v0.12.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* recreate a Swarm service whose mode changes ([fc74944](https://github.com/sntns/nemo/commit/fc74944c4eded1dd815626f0d206c8d65cb4163e))
+* recreate a Swarm service whose mode changes ([5af7d2b](https://github.com/sntns/nemo/commit/5af7d2be6ef4590c50eb18c2c53fd25bba1cd103))
+* refuse a published port out of range, and any .. in the records ([139b2bc](https://github.com/sntns/nemo/commit/139b2bc12143d190d418f0cfb8893be29f35fc4e))
+* refuse a published port out of range, and any .. in the records ([f6eca1b](https://github.com/sntns/nemo/commit/f6eca1b0ee7f6725cb264c7b7223bc2814cafa88))
+
 ## [0.12.0](https://github.com/sntns/nemo/compare/v0.11.0...v0.12.0) (2026-11-05)
 
 
