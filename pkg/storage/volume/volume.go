@@ -361,9 +361,13 @@ func extract(archive io.Reader, directory string) error {
 		if err != nil {
 			return err
 		}
+		// No .. at all, though fs.ValidPath refuses it below: the records name nothing with one, and
+		// checked before anything is made of the name, CodeQL sees the archive can't write outside.
+		if strings.Contains(header.Name, "..") {
+			return fmt.Errorf("%s: not a path in the volume", header.Name)
+		}
 		root, name, _ := strings.Cut(path.Clean(header.Name), "/")
-		// No .. at all, though fs.ValidPath refuses it already: the records name nothing with one.
-		if strings.Contains(header.Name, "..") || root != path.Base(mountPoint) || name != "" && !fs.ValidPath(name) {
+		if root != path.Base(mountPoint) || name != "" && !fs.ValidPath(name) {
 			return fmt.Errorf("%s: not a path in the volume", header.Name)
 		}
 		if name == "" {
