@@ -1,13 +1,18 @@
 # Changelog
 
+## [0.12.2](https://github.com/sntns/nemo/compare/v0.12.1...v0.12.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* refuse a .. in the records' archive before anything is made of it ([589c163](https://github.com/sntns/nemo/commit/589c1637e9a8fc9e6a057b3de7378931600244e3))
+
 ## [0.12.1](https://github.com/sntns/nemo/compare/v0.12.0...v0.12.1) (2026-11-05)
 
 
 ### Bug Fixes
 
-* recreate a Swarm service whose mode changes ([fc74944](https://github.com/sntns/nemo/commit/fc74944c4eded1dd815626f0d206c8d65cb4163e))
 * recreate a Swarm service whose mode changes ([5af7d2b](https://github.com/sntns/nemo/commit/5af7d2be6ef4590c50eb18c2c53fd25bba1cd103))
-* refuse a published port out of range, and any .. in the records ([139b2bc](https://github.com/sntns/nemo/commit/139b2bc12143d190d418f0cfb8893be29f35fc4e))
 * refuse a published port out of range, and any .. in the records ([f6eca1b](https://github.com/sntns/nemo/commit/f6eca1b0ee7f6725cb264c7b7223bc2814cafa88))
 
 ## [0.12.0](https://github.com/sntns/nemo/compare/v0.11.0...v0.12.0) (2026-11-05)
@@ -18,7 +23,6 @@
 * a compact live view, with --all for every service ([c0a6d06](https://github.com/sntns/nemo/commit/c0a6d0667ce4708733db8125cc05552fa6834304))
 * give each object installations share an installation of its own ([8e1dbf0](https://github.com/sntns/nemo/commit/8e1dbf0950a68211cacf2f65dea009b3fa8f382d))
 * load gill alone for the actions that run no service, with no cap ([70a5183](https://github.com/sntns/nemo/commit/70a5183649bfeab5748dfebdadcc22609e907bcc))
-* plan a stack before acting, and run its installations in parallel ([32f851e](https://github.com/sntns/nemo/commit/32f851e11b7c5ce3a53cf108fea96d729d4a585a))
 * plan a stack before acting, and run its installations in parallel ([1f80396](https://github.com/sntns/nemo/commit/1f80396fbf328c059a55f6f2c717267c5e119235))
 
 
