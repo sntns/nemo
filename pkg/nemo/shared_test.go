@@ -92,9 +92,9 @@ func (journal *journal) index(entry string) int {
 	return slices.Index(journal.entries, entry)
 }
 
-// A network two installations of five share is created by the first: the
-// second starts once it is announced, not once the first ends, and the
-// three others don't wait for it. On the way down, the creator goes last.
+// A network two installations of five share has an installation of its
+// own, with no service: the two wait for it, the three others don't, and it
+// goes after the two. Up again, it does not run: its bundle is the same.
 func TestUpSharesAnObjectBetweenItsUsers(t *testing.T) {
 	t.Parallel()
 	nemo, fake, bundleFile, _ := setup(t)
@@ -106,21 +106,20 @@ func TestUpSharesAnObjectBetweenItsUsers(t *testing.T) {
 	}
 
 	happened := &journal{}
-	bravoStarted := make(chan struct{})
+	charlieStarted := make(chan struct{})
 	nemo.execute = func(ctx context.Context, request runtime.Request) (runtime.Run, error) {
 		name := request.Action + " " + request.Bundle.Name
 		happened.add("start " + name)
 		announce(request)
 		switch name {
-		case "install alpha":
-			happened.add("announced demo_mesh")
+		case "install network.demo_mesh":
 			select {
-			case <-bravoStarted:
+			case <-charlieStarted:
 			case <-time.After(5 * time.Second):
-				return runtime.Run{}, errors.New("bravo waited for alpha to end, not for its network")
+				return runtime.Run{}, errors.New("charlie waited for the network it does not use")
 			}
-		case "install bravo":
-			close(bravoStarted)
+		case "install charlie":
+			close(charlieStarted)
 		}
 		run, err := fake.execute(ctx, request)
 		happened.add("end " + name)
@@ -129,25 +128,38 @@ func TestUpSharesAnObjectBetweenItsUsers(t *testing.T) {
 
 	_, err := nemo.Up(context.Background(), UpRequest{Stack: demo, Progress: happened})
 	require.NoError(t, err)
-	assert.Less(t, happened.index("announced demo_mesh"), happened.index("start install bravo"))
-	assert.Less(t, happened.index("start install bravo"), happened.index("end install alpha"), "bravo did not wait for alpha to end")
+	for _, user := range []string{"alpha", "bravo"} {
+		assert.Less(t, happened.index("end install network.demo_mesh"), happened.index("start install "+user), "%s waits for the network", user)
+	}
 	assert.Contains(t, happened.events, progress.Event{Installation: "demo", Group: "networks", Item: "demo_mesh", State: progress.Pending, Message: "shared by 2 installations"}, "the stack's row of the network")
-	assert.Contains(t, happened.events, progress.Event{Installation: "demo", Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"}, "told by its creator")
+	assert.Contains(t, happened.events, progress.Event{Installation: "demo", Group: "networks", Item: "demo_mesh", State: progress.Done, Message: "created"}, "told by its installation")
 	for _, event := range happened.events {
+		assert.False(t, strings.HasPrefix(event.Installation, "demo/network."), "the network has no row of an installation: %v", event)
 		assert.False(t, event.Installation == "demo" && strings.HasPrefix(event.Item, "demo_own"), "a network of one installation is its own: %v", event)
 	}
+	network := slices.IndexFunc(fake.requests, func(request runtime.Request) bool { return request.Bundle.Name == "network.demo_mesh" })
+	require.GreaterOrEqual(t, network, 0)
+	assert.Empty(t, fake.requests[network].Bundle.Images, "no service, no image")
+	assert.Equal(t, fake.requests[0].Bundle.InvocationImages, fake.requests[network].Bundle.InvocationImages, "the installer of the bundles")
+
+	before := len(fake.requests)
+	_, err = nemo.Up(context.Background(), UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.False(t, slices.ContainsFunc(fake.requests[before:], func(request runtime.Request) bool { return request.Bundle.Name == "network.demo_mesh" }), "the network is there as it is")
 
 	gone := &journal{}
 	_, err = nemo.Down(context.Background(), DownRequest{Name: "demo", Progress: gone})
 	require.NoError(t, err)
-	assert.Less(t, happened.index("end uninstall bravo"), happened.index("start uninstall alpha"), "the creator goes after the others")
+	for _, user := range []string{"alpha", "bravo"} {
+		assert.Less(t, happened.index("end uninstall "+user), happened.index("start uninstall network.demo_mesh"), "the network goes after %s", user)
+	}
 	var announced []string
 	for _, event := range gone.events {
 		if event.State == progress.Pending {
 			announced = append(announced, strings.TrimPrefix(event.Installation+" "+event.Item, "demo/"))
 		}
 	}
-	assert.Equal(t, []string{"bravo ", "charlie ", "delta ", "echo ", "alpha ", "demo demo_mesh"}, announced, "shown in the order they go, by name within a level, the shared network last")
+	assert.Equal(t, []string{"alpha ", "bravo ", "charlie ", "delta ", "echo ", "demo demo_mesh"}, announced, "shown in the order they go, by name within a level, the shared network last")
 }
 
 func TestUpRefusesWhatCannotBeShared(t *testing.T) {
@@ -207,8 +219,16 @@ func TestUpKeepsTheVolumeAKeptInstallationUses(t *testing.T) {
 	demo.Installations = demo.Installations[:1]
 	_, err = nemo.Up(context.Background(), UpRequest{Stack: demo, Purge: true, Progress: happened})
 	require.NoError(t, err)
-	assert.Equal(t, "uninstall bravo", fake.last().Action+" "+fake.last().Bundle.Name)
-	assert.NotContains(t, fake.last().Parameters, cnab.ParameterPurge, "its volumes are kept")
+	uninstalls := map[string]runtime.Request{}
+	for _, request := range fake.requests {
+		if request.Action == cnab.ActionUninstall {
+			uninstalls[request.Bundle.Name] = request
+		}
+	}
+	require.Contains(t, uninstalls, "bravo")
+	assert.NotContains(t, uninstalls["bravo"].Parameters, cnab.ParameterPurge, "its volumes are kept")
+	require.Contains(t, uninstalls, "volume.demo_data", "the volume is shared no more")
+	assert.NotContains(t, uninstalls["volume.demo_data"].Parameters, cnab.ParameterPurge, "and alpha still uses it")
 	assert.Contains(t, happened.events, progress.Event{Installation: "demo/bravo", Group: "volumes", Item: "demo_data", State: progress.Warning, Message: "kept: alpha still uses it"})
 }
 

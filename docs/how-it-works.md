@@ -38,13 +38,12 @@ sequenceDiagram
     par each installation
         nemo->>gill: validate: check the bundle against the target
     end
-    par each installation, once its dependencies are done<br/>and what it shares is there
+    par each installation, once its dependencies are done,<br/>a shared object's own installation before its users
         opt images: load
             nemo->>Docker: load the bundle's images
         end
         nemo->>Docker: start gill, with the socket,<br/>the bundle, parameters and credentials
         gill->>Docker: volumes, networks, configs, secrets
-        gill-->>nemo: progress events: the shared objects are there
         gill->>Docker: containers (Compose) or services (Swarm)
         gill->>Docker: wait until the services run
         gill-->>nemo: result
@@ -61,9 +60,9 @@ sequenceDiagram
 - The parameters are the stack's and the installation's, over what the last run used, limited to those the bundle declares. Credentials are read from their sources now, once: a file, an environment variable, or the output of a command. One that can't be read stops `nemo up` before anything runs.
 - nemo renders the installation's compose project with gill's own code, the action's parameters and credentials: it knows every network, volume, config and secret the installation will have on the target, under the name it will have there, and its services and published ports.
 
-The compose project of every installation is named after the stack, so two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, declare the same object. They share it: the first of them in the stack's order creates it. A network one installation declares, and another one declares otherwise, is the first one's, with a warning. What can't be shared stops `nemo up` before anything runs: a service, or a published port, of two installations, and a volume two of them make with other options.
+The compose project of every installation is named after the stack, so two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, declare the same object. It is none of theirs, and does not depend on their services: nemo gives it an installation of its own, `network.NAME`, `volume.NAME`, `config.NAME` or `secret.NAME`. Its bundle declares the object alone, with no service, as the first installation that declares it does, with that bundle's gill and nemo-* parameters; a config's or a secret's content reaches it as a credential, never recorded. A network one installation declares otherwise than the first is made as the first declares it, with a warning. What can't be shared stops `nemo up` before anything runs: a service, or a published port, of two installations, and a volume two of them make with other options.
 
-**Each installation.** nemo checks every bundle that has a `validate` action first, several at once. Then each installation runs as soon as those it depends on are done, and the objects it shares with an installation before it are there: their creator's gill announces them as it creates them, before its services, so the others don't wait for it to end. Up to four actions run at once.
+**Each installation.** nemo checks every bundle that has a `validate` action first, several at once. Then each installation runs as soon as those it depends on are done, and the installations of the objects it shares: those come first, and the installations that share nothing don't wait for them. A shared object's installation runs again only when its declaration changes. Up to four actions run at once.
 
 - With `images: load`, nemo loads the bundle's images into the target's Docker, for its platform only. Each is tagged after its digest, so a new build is a new image.
 - nemo starts gill on the target with the Docker socket mounted, the bundle, the parameters and the credentials, as the CNAB specification describes. It reads gill's events as they come, and shows them.
@@ -79,14 +78,14 @@ Nothing of this is in the bundles: a bundle is a CNAB bundle, which Porter or an
 
 ## Taking it down
 
-`nemo down` uninstalls every installation of the stack from nemo's records: it needs no manifest. An installation goes once those that depend on it are gone, and the creator of an object installations share once its other users are gone, several at once. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the stack's labels, and the configs and secrets its services used, once nothing else uses them. An object with the same name that nemo did not create is left alone, with a warning. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept: the last installation that uses it removes it, and waits for Swarm to release it, up to 30 seconds.
+`nemo down` uninstalls every installation of the stack from nemo's records: it needs no manifest. An installation goes once those that depend on it are gone, and a shared object's installation once its users are gone, several at once. For each one, gill finds the objects the compose project declares by their names, and removes those that carry the stack's labels, and the configs and secrets its services used, once nothing else uses them. An object with the same name that nemo did not create is left alone, with a warning. Volumes are kept unless you ask for `--purge`. A network another installation still uses is kept: the last installation that uses it removes it, and waits for Swarm to release it, up to 30 seconds.
 
 ## Labels and ownership
 
 Everything gill creates carries labels: the stack, the bundle, the service, and a hash of its specification. They let nemo:
 
 - tell its own objects from any other on the same Docker, and refuse to take over a network, volume or service it did not create;
-- share what installations share: a network or a volume carries the stack's labels, which every installation of the stack uses, and the bundle's that created it; a service, config or secret is its installation's;
+- share what installations share: a network or a volume carries the stack's labels, which every installation of the stack uses, and the bundle's that created it, a shared object's own; a service, config or secret is its installation's;
 - keep what did not change on an upgrade, and recreate only what did;
 - read the status and the logs of a stack's services;
 - stay compatible with Docker's own tools: `docker compose ps` and `docker compose logs` see the containers gill creates, and `docker stack services` the services.

@@ -93,7 +93,7 @@ nemo keeps stacks by name in its home, and one of them is the current stack, whi
 
 ## Installation
 
-An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created. Two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, share that one object: the first of them in the stack's order creates it, and removes it once the others are gone.
+An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created. Two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, share that one object. It is none of theirs: nemo gives it an installation of its own, `network.shop_mesh` for instance, whose bundle declares it alone, with no service. It is created before the installations that use it, and removed once they are gone.
 
 nemo keeps a record of each installation, as the CNAB specification describes it:
 

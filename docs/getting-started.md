@@ -108,7 +108,7 @@ hello · compose · 2 installations
 ✔ whoami         install    1 service  2.6s
 ```
 
-nemo installed `nginx` first, because `whoami` requires it. For each one, it loaded the images into your Docker and started gill, the installer. gill created the volume, then the container with its page and its token, and waited until it ran. The two bundles name no network, so their services join the project's default one, `hello_default`: the same network for both, which has a line of its own. `nginx`'s installer created it, being first; it is also the last to go, on `nemo down`.
+nemo installed `nginx` first, because `whoami` requires it. For each one, it loaded the images into your Docker and started gill, the installer. gill created the volume, then the container with its page and its token, and waited until it ran. The two bundles name no network, so their services join the project's default one, `hello_default`: the same network for both, which has a line of its own. It has an installation of its own, `network.hello_default`, which created it before the two, and removes it after them, on `nemo down`.
 
 ```console
 $ curl localhost:8080

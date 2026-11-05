@@ -17,34 +17,26 @@ type step struct {
 	name string
 	// after are the installations it waits for.
 	after []string
-	// needs are the objects it waits for another step to announce.
-	needs []object
-	// creates are the objects it announces, which others need.
-	creates []object
 }
 
-// schedule runs each step once the steps it comes after are done and the
-// objects it needs are announced, at most limit at once, starting them in
-// the order given. A step's objects count as announced once it ends, if it
-// did not say so before. After a step fails, it starts no other, and waits
-// for those under way: stopping an action midway would leave its
-// installation half done. The steps must have no cycle.
-func schedule(steps []step, limit int, act func(step step, announce func(object)) error) error {
-	type message struct {
-		ended     string
-		err       error
-		announced *object
+// schedule runs each step once the steps it comes after are done, at most
+// limit at once, starting them in the order given. After a step fails, it
+// starts no other, and waits for those under way: stopping an action
+// midway would leave its installation half done. The steps must have no
+// cycle.
+func schedule(steps []step, limit int, act func(step step) error) error {
+	type ended struct {
+		name string
+		err  error
 	}
 	inSet := map[string]bool{}
 	for _, current := range steps {
 		inSet[current.name] = true
 	}
-	messages := make(chan message)
+	endings := make(chan ended)
 	started, done := map[string]bool{}, map[string]bool{}
-	announced := map[object]bool{}
 	ready := func(current step) bool {
-		return !slices.ContainsFunc(current.after, func(name string) bool { return inSet[name] && !done[name] }) &&
-			!slices.ContainsFunc(current.needs, func(needed object) bool { return !announced[needed] })
+		return !slices.ContainsFunc(current.after, func(name string) bool { return inSet[name] && !done[name] })
 	}
 	var errs []error
 	running := 0
@@ -55,30 +47,16 @@ func schedule(steps []step, limit int, act func(step step, announce func(object)
 			}
 			started[current.name] = true
 			running++
-			go func() {
-				err := act(current, func(created object) { messages <- message{announced: &created} })
-				messages <- message{ended: current.name, err: err}
-			}()
+			go func() { endings <- ended{current.name, act(current)} }()
 		}
 		if running == 0 {
 			break
 		}
-		received := <-messages
-		if received.announced != nil {
-			announced[*received.announced] = true
-			continue
-		}
+		end := <-endings
 		running--
-		done[received.ended] = true
-		for _, current := range steps {
-			if current.name == received.ended {
-				for _, created := range current.creates {
-					announced[created] = true
-				}
-			}
-		}
-		if received.err != nil {
-			errs = append(errs, received.err)
+		done[end.name] = true
+		if end.err != nil {
+			errs = append(errs, end.err)
 		}
 	}
 	if len(errs) > 0 {

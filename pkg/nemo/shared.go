@@ -3,13 +3,17 @@ package nemo
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
+	"github.com/cnabio/cnab-go/bundle"
+	"github.com/cnabio/cnab-go/bundle/definition"
 	"github.com/cnabio/cnab-go/valuesource"
 	"github.com/compose-spec/compose-go/v2/types"
 
@@ -24,10 +28,9 @@ import (
 // The compose project of every installation of a stack is named after the
 // stack, so two installations that declare a network or a volume of the same
 // name, or a Swarm config or secret of the same name and content, declare
-// the same object. Of the installations that use it, the first in the
-// stack's order creates it: the others start once its installer announced
-// it. On the way down, it goes after them, and its installer removes the
-// object, which nothing uses any more.
+// the same object. That object is none of theirs: it has an installation of
+// its own, whose bundle declares it alone, with no service. Its users depend
+// on it: it is created before them, and removed once they are gone.
 
 // object is an object of the target, by the group its installer reports it
 // in, and its name there.
@@ -45,10 +48,13 @@ const (
 )
 
 // declaration is how an installation declares an object: one it only
-// refers to is external; settings are what two declarations must agree on.
+// refers to is external; settings are what two declarations must agree on;
+// key and config are the object as its compose project has it, rendered.
 type declaration struct {
 	external bool
 	settings any
+	key      string
+	config   any
 }
 
 // inventory is what an installation's project declares on the target.
@@ -86,11 +92,11 @@ func inventoryOf(ctx context.Context, request runtime.Request, values valuesourc
 	}
 	compose := project.Compose
 	declared := &inventory{objects: map[object]declaration{}}
-	for _, network := range compose.Networks {
-		declared.objects[object{groupNetworks, network.Name}] = declaration{bool(network.External), networkSettingsOf(network, request.Target.Orchestrator)}
+	for key, network := range compose.Networks {
+		declared.objects[object{groupNetworks, network.Name}] = declaration{bool(network.External), networkSettingsOf(network, request.Target.Orchestrator), key, network}
 	}
-	for _, volume := range compose.Volumes {
-		declared.objects[object{groupVolumes, volume.Name}] = declaration{bool(volume.External), volumeSettings{volume.Driver, options(volume.DriverOpts)}}
+	for key, volume := range compose.Volumes {
+		declared.objects[object{groupVolumes, volume.Name}] = declaration{bool(volume.External), volumeSettings{volume.Driver, options(volume.DriverOpts)}, key, volume}
 	}
 	// With Compose, configs and secrets are files in the containers, not objects.
 	if request.Target.Orchestrator == target.Swarm {
@@ -99,14 +105,14 @@ func inventoryOf(ctx context.Context, request runtime.Request, values valuesourc
 			if spec, err := swarmconvert.Config(key, config, nil); err == nil && spec.Data != nil {
 				name = spec.Name
 			}
-			declared.objects[object{groupConfigs, name}] = declaration{external: bool(config.External)}
+			declared.objects[object{groupConfigs, name}] = declaration{external: bool(config.External), key: key, config: config}
 		}
 		for key, secret := range compose.Secrets {
 			name := secret.Name
 			if spec, err := swarmconvert.Secret(key, secret, nil); err == nil && spec.Data != nil {
 				name = spec.Name
 			}
-			declared.objects[object{groupSecrets, name}] = declaration{external: bool(secret.External)}
+			declared.objects[object{groupSecrets, name}] = declaration{external: bool(secret.External), key: key, config: secret}
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(compose.Services)) {
@@ -166,18 +172,19 @@ type sharedObject struct {
 	object
 	// users are the installations that use it, in the stack's order.
 	users []string
-	// creator is the first of them to declare it, not only refer to it:
-	// it creates the object, and removes it after the others.
-	creator string
-	// warning says how a user declares it otherwise than the creator.
+	// declarer is the first of them to declare it, not only refer to it: its
+	// declaration is the one the object's installation makes.
+	declarer string
+	declared declaration
+	// warning says how a user declares it otherwise than the declarer.
 	warning string
 }
 
 // sharing returns the objects the installations share, by group then name,
 // from their inventories in the stack's order. It refuses what can't be
 // shared: a service or a published port of two installations, and a volume
-// two of them make otherwise. A network declared otherwise is the creator's,
-// as it is created first, with a warning.
+// two of them make otherwise. A network declared otherwise is made as the
+// first declares it, with a warning.
 func sharing(ordered []string, inventories map[string]*inventory) ([]sharedObject, error) {
 	type use struct {
 		installation string
@@ -216,21 +223,21 @@ func sharing(ordered []string, inventories map[string]*inventory) ([]sharedObjec
 	var shared []sharedObject
 	for _, key := range slices.SortedFunc(maps.Keys(uses), compareObjects) {
 		users := uses[key]
-		creator := slices.IndexFunc(users, func(user use) bool { return !user.external })
-		if len(users) < 2 || creator < 0 {
+		first := slices.IndexFunc(users, func(user use) bool { return !user.external })
+		if len(users) < 2 || first < 0 {
 			continue
 		}
-		found := sharedObject{object: key, creator: users[creator].installation}
+		found := sharedObject{object: key, declarer: users[first].installation, declared: users[first].declaration}
 		for _, user := range users {
 			found.users = append(found.users, user.installation)
-			if user.external || reflect.DeepEqual(user.settings, users[creator].settings) {
+			if user.external || reflect.DeepEqual(user.settings, users[first].settings) {
 				continue
 			}
 			if key.group == groupVolumes {
-				errs = append(errs, fmt.Errorf("volume %s: %s and %s make it with other drivers or options: give it the same in both", key.name, users[creator].installation, user.installation))
+				errs = append(errs, fmt.Errorf("volume %s: %s and %s make it with other drivers or options: give it the same in both", key.name, users[first].installation, user.installation))
 				continue
 			}
-			found.warning = fmt.Sprintf("%s declares it otherwise than %s, which creates it as it declares it", user.installation, users[creator].installation)
+			found.warning = fmt.Sprintf("%s declares it otherwise than %s, whose declaration makes it", user.installation, users[first].installation)
 		}
 		shared = append(shared, found)
 	}
@@ -242,63 +249,6 @@ var groupOrder = []string{groupVolumes, groupNetworks, groupConfigs, groupSecret
 
 func compareObjects(left, right object) int {
 	return cmp.Or(cmp.Compare(slices.Index(groupOrder, left.group), slices.Index(groupOrder, right.group)), cmp.Compare(left.name, right.name))
-}
-
-// sharingPlan is who waits for what, from the objects the installations
-// share: the creator of each one, and those after it in the stack's order.
-type sharingPlan struct {
-	objects []sharedObject
-	// position is each installation's place in the stack's order.
-	position map[string]int
-}
-
-func newSharingPlan(ordered []string, shared []sharedObject) sharingPlan {
-	plan := sharingPlan{objects: shared, position: map[string]int{}}
-	for i, name := range ordered {
-		plan.position[name] = i
-	}
-	return plan
-}
-
-// creates are the objects the installation creates for the others.
-func (plan sharingPlan) creates(name string) []object {
-	var created []object
-	for _, shared := range plan.objects {
-		if shared.creator == name {
-			created = append(created, shared.object)
-		}
-	}
-	return created
-}
-
-// needs are the objects the installation waits for, on the way up: those
-// another creates before it in the stack's order. One before the creator may
-// be its dependency, so it does not wait.
-func (plan sharingPlan) needs(name string) []object {
-	var needed []object
-	for _, shared := range plan.objects {
-		if shared.creator != name && slices.Contains(shared.users, name) && plan.position[name] > plan.position[shared.creator] {
-			needed = append(needed, shared.object)
-		}
-	}
-	return needed
-}
-
-// leaveAfter are the installations the creator waits for, on the way down:
-// the users of what it creates, after it in the stack's order.
-func (plan sharingPlan) leaveAfter(name string) []string {
-	var after []string
-	for _, shared := range plan.objects {
-		if shared.creator != name {
-			continue
-		}
-		for _, user := range shared.users {
-			if user != name && plan.position[user] > plan.position[name] && !slices.Contains(after, user) {
-				after = append(after, user)
-			}
-		}
-	}
-	return after
 }
 
 // sharedVolumes returns, for each volume the installation declares that
@@ -328,36 +278,154 @@ func usersText(shared sharedObject) string {
 	return fmt.Sprintf("shared by %d installations", len(shared.users))
 }
 
-// eventsOf passes on the installation's events, and gives those about the
-// objects it creates for the others to the stack's row of the object too:
-// the creator's are the object's. It calls announced once one is there.
-func (plan sharingPlan) eventsOf(events progress.Sink, stackName, name string, announced func(object)) progress.Sink {
-	created := plan.creates(name)
-	if len(created) == 0 {
-		return events
+// node names the installation of the object: network.NAME, volume.NAME…
+func (shared sharedObject) node() string {
+	return strings.TrimSuffix(shared.group, "s") + "." + shared.name
+}
+
+// sharedMark marks the compose project of an object's own installation.
+const sharedMark = "x-nemo-shared"
+
+// sharedVersion is the version of the bundles of the objects.
+const sharedVersion = "1.0.0"
+
+// sharedOf returns the object an installation's bundle is made for, if it is
+// the bundle of an object installations share.
+func sharedOf(bundle cnab.ExtendedBundle, declared *inventory) (object, bool) {
+	if bundle.Compose == nil || declared == nil || len(declared.objects) != 1 {
+		return object{}, false
 	}
-	return progress.SinkFunc(func(event progress.Event) {
-		events.Emit(event)
-		key := object{event.Group, event.Item}
-		if !slices.Contains(created, key) {
-			return
+	marked := slices.ContainsFunc(bundle.Compose.Documents, func(document cnab.ComposeDocument) bool {
+		_, found := document.Config[sharedMark]
+		return found
+	})
+	for key := range declared.objects {
+		return key, marked
+	}
+	return object{}, false
+}
+
+// sharedBundle makes the bundle of the object: the installer and the nemo-*
+// parameters of the bundle that declares it first, and a compose project
+// that declares the object alone, as that bundle does. A config's or a
+// secret's content is a credential of the bundle, which nothing records:
+// it is returned, to be given to its action.
+func sharedBundle(base cnab.ExtendedBundle, shared sharedObject) (cnab.ExtendedBundle, valuesource.Set, error) {
+	made := base.Bundle
+	made.Name, made.Version = shared.node(), sharedVersion
+	made.Description = fmt.Sprintf("The %s %s the stack's installations share", strings.TrimSuffix(shared.group, "s"), shared.name)
+	made.Images, made.Outputs, made.Credentials = nil, nil, nil
+	made.Parameters, made.Definitions = map[string]bundle.Parameter{}, definition.Definitions{}
+	for name, parameter := range base.Parameters {
+		if strings.HasPrefix(name, "nemo-") && name != cnab.ParameterOverride {
+			made.Parameters[name] = parameter
+			made.Definitions[parameter.Definition] = base.Definitions[parameter.Definition]
 		}
-		about := event
-		about.Installation = stackName
-		events.Emit(about)
-		if event.State == progress.Done && announced != nil {
-			announced(key)
+	}
+	made.Custom = map[string]any{}
+	for key, value := range base.Custom {
+		if key != cnab.ComposeExtension.Key && key != cnab.DependenciesExtension.Key && key != cnab.ParameterSourcesExtension.Key {
+			made.Custom[key] = value
+		}
+	}
+	made.RequiredExtensions = slices.DeleteFunc(slices.Clone(base.RequiredExtensions), func(key string) bool { _, kept := made.Custom[key]; return !kept })
+
+	declaration, values := map[string]any{}, valuesource.Set(nil)
+	switch config := shared.declared.config.(type) {
+	case types.NetworkConfig:
+		config.External = false
+		if err := asMap(config, &declaration); err != nil {
+			return cnab.ExtendedBundle{}, nil, err
+		}
+	case types.VolumeConfig:
+		volumeType, typed := config.Extensions[installer.VolumeExtension]
+		if typed {
+			config.Driver, config.DriverOpts = "", nil
+		}
+		if err := asMap(config, &declaration); err != nil {
+			return cnab.ExtendedBundle{}, nil, err
+		}
+		if typed {
+			declaration[installer.VolumeExtension] = volumeType
+		}
+	case types.ConfigObjConfig:
+		declaration = map[string]any{"name": config.Name, "environment": "NEMO_SHARED", "labels": config.Labels}
+		values = valuesource.Set{"nemo-shared": config.Content}
+	case types.SecretConfig:
+		declaration = map[string]any{"name": config.Name, "environment": "NEMO_SHARED", "labels": config.Labels}
+		values = valuesource.Set{"nemo-shared": config.Content}
+	default:
+		return cnab.ExtendedBundle{}, nil, fmt.Errorf("%s %s: nemo can't make it alone", shared.group, shared.name)
+	}
+	if values != nil {
+		made.Credentials = map[string]bundle.Credential{"nemo-shared": {Location: bundle.Location{EnvironmentVariable: "NEMO_SHARED"}, Required: true, ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Description: "The content of the " + strings.TrimSuffix(shared.group, "s")}}
+	}
+	compose := cnab.Compose{SchemaVersion: cnab.ComposeSchemaVersion, Documents: []cnab.ComposeDocument{{
+		Name:   "shared.yaml",
+		Config: map[string]any{sharedMark: map[string]any{}, shared.group: map[string]any{shared.declared.key: declaration}},
+	}}}
+	if err := cnab.ComposeExtension.Write(&made, compose); err != nil {
+		return cnab.ExtendedBundle{}, nil, err
+	}
+	extended, err := cnab.NewBundle(made)
+	return extended, values, err
+}
+
+// asMap turns a compose object into the document that declares it.
+func asMap(value any, into *map[string]any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, into)
+}
+
+// sameBundle tells whether the object's bundle is the one its installation
+// last ran: then the object is there, as it is, and nothing needs to run.
+func sameBundle(recorded, made cnab.ExtendedBundle) bool {
+	if recorded.Compose == nil || made.Compose == nil || len(recorded.InvocationImages) == 0 {
+		return false
+	}
+	left, leftErr := json.Marshal(recorded.Compose.Documents)
+	right, rightErr := json.Marshal(made.Compose.Documents)
+	return leftErr == nil && rightErr == nil && string(left) == string(right) && recorded.InvocationImages[0].Digest == made.InvocationImages[0].Digest
+}
+
+// sharedEvents tells the stack's row of the object what its installation
+// does, once it ends: what its installer said of the object, its warnings,
+// or its error.
+func sharedEvents(events progress.Sink, stackName string, shared object) progress.Sink {
+	var mutex sync.Mutex
+	said := ""
+	return progress.SinkFunc(func(event progress.Event) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		row := progress.Event{Installation: stackName, Group: shared.group, Item: shared.name, State: event.State}
+		switch {
+		case event.Group == shared.group && event.Item == shared.name && event.State == progress.Warning:
+			row.Message = event.Message
+			events.Emit(row)
+		case event.Group == shared.group && event.Item == shared.name:
+			said = cmp.Or(event.Message, said)
+		case event.Group == progress.Installation && event.State == progress.Done:
+			row.Message = said
+			events.Emit(row)
+		case event.Group == progress.Installation && event.State != progress.Pending:
+			if event.State == progress.Error {
+				row.Message = event.Message
+			}
+			events.Emit(row)
 		}
 	})
 }
 
-// announce tells each shared object pending, on the stack's row of its own,
-// with how it is declared otherwise.
-func (plan sharingPlan) announce(events progress.Sink, stackName string) {
-	for _, shared := range plan.objects {
-		events.Emit(progress.Event{Installation: stackName, Group: shared.group, Item: shared.name, State: progress.Pending, Message: usersText(shared)})
-		if shared.warning != "" {
-			events.Emit(progress.Event{Installation: stackName, Group: shared.group, Item: shared.name, State: progress.Warning, Message: shared.warning})
+// announceShared tells each shared object pending, on the stack's row of
+// its own, with how it is declared otherwise.
+func announceShared(events progress.Sink, stackName string, shared []sharedObject) {
+	for _, object := range shared {
+		events.Emit(progress.Event{Installation: stackName, Group: object.group, Item: object.name, State: progress.Pending, Message: usersText(object)})
+		if object.warning != "" {
+			events.Emit(progress.Event{Installation: stackName, Group: object.group, Item: object.name, State: progress.Warning, Message: object.warning})
 		}
 	}
 }

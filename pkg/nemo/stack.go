@@ -52,12 +52,13 @@ type StackResult struct {
 // Up brings the stack to its manifest. It plans before it touches anything:
 // it reads every installation's credentials, renders its compose project to
 // know what it declares on the target, and refuses what two installations
-// can't share. It then checks every bundle that has a validate action,
-// installs the bundles not installed and upgrades the others, and
-// uninstalls the installations the stack no longer has. Each starts as soon
-// as those it depends on are done and the objects it shares with others are
-// there, beside the others that can; on the way down, dependants first, and
-// the creator of a shared object after its other users. After an action
+// can't share. An object two installations share gets an installation of
+// its own, which creates it alone, with no service: its users depend on it.
+// Up then checks every bundle that has a validate action, installs the
+// bundles not installed and upgrades the others, and uninstalls the
+// installations the stack no longer has. Each starts as soon as those it
+// depends on are done, beside the others that can; on the way down,
+// dependants first, and a shared object after its users. After an action
 // fails it starts no other, and waits for those under way.
 func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err error) {
 	done, err := nemo.open(ctx, &request.Stack, request.Stack.Name, true)
@@ -74,17 +75,22 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err
 	if err != nil {
 		return StackResult{}, err
 	}
-	plan.sharing.announce(events, plan.stack.Name)
+	announceShared(events, plan.stack.Name, plan.shared)
 	plan.announce(events)
 	for _, warning := range warnings {
 		events.Emit(warning)
+	}
+	for _, shared := range plan.shared {
+		if _, acts := plan.nodes[shared.node()]; !acts {
+			events.Emit(progress.Event{Installation: plan.stack.Name, Group: shared.group, Item: shared.name, State: progress.Done})
+		}
 	}
 
 	var checks []step
 	for _, bundle := range plan.validated() {
 		checks = append(checks, step{name: bundle.Name})
 	}
-	err = schedule(checks, plan.limit, func(current step, _ func(object)) error {
+	err = schedule(checks, plan.limit, func(current step) error {
 		_, err := nemo.actOn(ctx, plan, plan.entries[current.name].loaded.Definition, events, true)
 		return err
 	})
@@ -94,10 +100,13 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err
 
 	var result StackResult
 	var mutex sync.Mutex
-	err = schedule(plan.steps(), plan.limit, func(current step, announce func(object)) error {
+	err = schedule(plan.steps(), plan.limit, func(current step) error {
 		bundle := plan.entries[current.name].loaded.Definition
-		request := plan.actionRequest(bundle, plan.sharing.eventsOf(events, plan.stack.Name, current.name, announce), false)
-		run, err := nemo.perform(ctx, plan.action(bundle), request, plan.prepared[current.name])
+		sink := events
+		if shared, isObject := plan.nodes[current.name]; isObject {
+			sink = sharedEvents(events, plan.stack.Name, shared.object)
+		}
+		run, err := nemo.perform(ctx, plan.action(bundle), plan.actionRequest(bundle, sink, false), plan.prepared[current.name])
 		if run.Revision != "" {
 			mutex.Lock()
 			result.Runs = append(result.Runs, run)
@@ -120,12 +129,13 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err
 }
 
 // prepare plans the action of each installation, reads its credentials and
-// renders what it declares, then what the installations share: all before
-// anything is touched. An installation nemo can't render makes the stack go
-// one installation at a time, as nemo can't tell what it shares.
+// renders what it declares, then what the installations share, and the
+// installation of each shared object: all before anything is touched. An
+// installation nemo can't render makes the stack go one installation at a
+// time, as nemo can't tell what it shares.
 func (nemo *Nemo) prepare(ctx context.Context, plan *upPlan) ([]progress.Event, error) {
 	var warnings []progress.Event
-	plan.prepared, plan.inventories, plan.limit = map[string]actionPlan{}, map[string]*inventory{}, parallelActions
+	plan.prepared, plan.inventories, plan.nodes, plan.limit = map[string]actionPlan{}, map[string]*inventory{}, map[string]sharedObject{}, parallelActions
 	for _, bundle := range plan.ordered {
 		action := plan.action(bundle)
 		entry := plan.entries[bundle.Name]
@@ -150,10 +160,45 @@ func (nemo *Nemo) prepare(ctx context.Context, plan *upPlan) ([]progress.Event, 
 		return nil, fmt.Errorf("stack %s: %w", plan.stack.Name, err)
 	}
 	if plan.limit == 1 {
-		shared = nil
+		return warnings, nil
 	}
-	plan.sharing = newSharingPlan(orderedNames(plan.ordered), shared)
+	plan.shared = shared
+	for _, found := range shared {
+		if err := nemo.prepareShared(ctx, plan, found); err != nil {
+			return nil, fmt.Errorf("stack %s: %s %s: %w", plan.stack.Name, strings.TrimSuffix(found.group, "s"), found.name, err)
+		}
+	}
 	return warnings, nil
+}
+
+// prepareShared makes the bundle of the shared object, and plans its
+// installation's action, unless it already ran that bundle.
+func (nemo *Nemo) prepareShared(ctx context.Context, plan *upPlan, shared sharedObject) error {
+	declarer := plan.entries[shared.declarer]
+	made, values, err := sharedBundle(plan.prepared[shared.declarer].bundle, shared)
+	if err != nil {
+		return err
+	}
+	name := shared.node()
+	entry := stackEntry{
+		spec:   storage.InstallationSpec{Name: name, Stack: plan.stack.Name, Bundle: storage.BundleReference{Version: sharedVersion}},
+		source: declarer.source,
+		loaded: cnab.BundleReference{Definition: made, RelocationMap: declarer.loaded.RelocationMap},
+	}
+	plan.entries[name] = entry
+	if recorded, installed := plan.present[name]; installed && recorded.IsInstalled() {
+		if previous, err := nemo.bundleOf(ctx, recorded); err == nil && sameBundle(previous, made) {
+			return nil
+		}
+	}
+	action := plan.action(made)
+	prepared, err := nemo.plan(ctx, action, plan.actionRequest(made, nil, false), &entry.loaded)
+	if err != nil {
+		return err
+	}
+	prepared.values, prepared.given, prepared.read = values, slices.Sorted(maps.Keys(values)), true
+	plan.prepared[name], plan.nodes[name] = prepared, shared
+	return nil
 }
 
 // unreadable warns that nemo can't render an installation's project: it
@@ -163,14 +208,24 @@ func unreadable(stackName, name string, err error) progress.Event {
 	return progress.Event{Installation: stackName + "/" + name, Group: "project", State: progress.Warning, Message: fmt.Sprintf("nemo can't read it (%v): the stack goes one installation at a time", err)}
 }
 
-// steps are the actions of the plan, each after the installations it
-// depends on and the objects it shares that another creates.
+// steps are the actions of the plan: the installations of the shared
+// objects, then the installations, each after those it depends on and the
+// objects it shares, in the order they can go.
 func (plan *upPlan) steps() []step {
-	steps := make([]step, len(plan.ordered))
-	for i, bundle := range plan.ordered {
-		steps[i] = step{name: bundle.Name, after: stack.DependencyNames(bundle), needs: plan.sharing.needs(bundle.Name), creates: plan.sharing.creates(bundle.Name)}
+	var steps []step
+	for _, name := range slices.Sorted(maps.Keys(plan.nodes)) {
+		steps = append(steps, step{name: name})
 	}
-	return steps
+	for _, bundle := range plan.ordered {
+		after := stack.DependencyNames(bundle)
+		for _, shared := range plan.shared {
+			if _, acts := plan.nodes[shared.node()]; acts && slices.Contains(shared.users, bundle.Name) {
+				after = append(after, shared.node())
+			}
+		}
+		steps = append(steps, step{name: bundle.Name, after: after})
+	}
+	return levelled(steps)
 }
 
 // upPlan is what Up does: the bundles to act on, in the order of their
@@ -184,7 +239,10 @@ type upPlan struct {
 	// inventories what each installation declares, by name.
 	prepared    map[string]actionPlan
 	inventories map[string]*inventory
-	sharing     sharingPlan
+	// shared are the objects the installations share, and nodes those whose
+	// installation acts, by the name of their installation.
+	shared []sharedObject
+	nodes  map[string]sharedObject
 	// limit is how many actions run at once.
 	limit int
 }
@@ -485,15 +543,28 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		inventories[bundle.Name] = declared
 	}
 	// What the installations declare orders them: they were installed, and can't be refused any more.
-	shared, _ := sharing(orderedNames(ordered), inventories)
-	if limit == 1 {
-		shared = nil
+	objects := map[string]object{}
+	users := map[object][]string{}
+	for _, bundle := range ordered {
+		if key, isObject := sharedOf(bundle, inventories[bundle.Name]); isObject {
+			objects[bundle.Name] = key
+		}
 	}
-	sharing := newSharingPlan(orderedNames(ordered), shared)
+	for _, bundle := range ordered {
+		if _, isObject := objects[bundle.Name]; isObject || inventories[bundle.Name] == nil {
+			continue
+		}
+		for key := range inventories[bundle.Name].objects {
+			users[key] = append(users[key], bundle.Name)
+		}
+	}
 
 	var steps []step
 	for _, bundle := range ordered {
-		after := sharing.leaveAfter(bundle.Name)
+		var after []string
+		if key, isObject := objects[bundle.Name]; isObject {
+			after = users[key]
+		}
 		for _, other := range ordered {
 			if slices.Contains(stack.DependencyNames(other), bundle.Name) {
 				after = append(after, other.Name)
@@ -501,32 +572,50 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		}
 		steps = append(steps, step{name: bundle.Name, after: after})
 	}
+	// An object installations shared before it had an installation of its own goes with the first of them, after the others.
+	if limit > 1 {
+		shared, _ := sharing(orderedNames(ordered), inventories)
+		for _, found := range shared {
+			if slices.Contains(slices.Collect(maps.Values(objects)), found.object) {
+				continue
+			}
+			first := slices.IndexFunc(steps, func(current step) bool { return current.name == found.users[0] })
+			steps[first].after = append(steps[first].after, found.users[1:]...)
+		}
+	}
 	// Shown, and started, in the order they go: by what each waits for, then by name.
 	steps = levelled(steps)
 	for _, current := range steps {
+		if key, isObject := objects[current.name]; isObject {
+			events.Emit(progress.Event{Installation: stackName, Group: key.group, Item: key.name, State: progress.Pending, Message: fmt.Sprintf("shared by %d installations", len(users[key]))})
+			continue
+		}
 		events.Emit(progress.Event{Installation: stackName + "/" + current.name, Group: progress.Installation, State: progress.Pending, Message: cnab.ActionUninstall})
 	}
-	sharing.announce(events, stackName)
 	for _, warning := range warnings {
 		events.Emit(warning)
 	}
 
 	var runs []Run
 	var mutex sync.Mutex
-	err = schedule(steps, limit, func(current step, _ func(object)) error {
+	err = schedule(steps, limit, func(current step) error {
 		bundle := ordered[slices.IndexFunc(ordered, func(bundle cnab.ExtendedBundle) bool { return bundle.Name == current.name })]
+		sink := events
+		if key, isObject := objects[bundle.Name]; isObject {
+			sink = sharedEvents(events, stackName, key)
+		}
 		var parameters map[string]string
 		if _, declared := bundle.Parameters[cnab.ParameterPurge]; declared && purge {
 			if still := sharedVolumes(inventories[bundle.Name], kept); len(still) > 0 {
 				for _, volume := range slices.Sorted(maps.Keys(still)) {
-					events.Emit(progress.Event{Installation: stackName + "/" + bundle.Name, Group: groupVolumes, Item: volume, State: progress.Warning, Message: "kept: " + strings.Join(still[volume], ", ") + " still uses it"})
+					sink.Emit(progress.Event{Installation: stackName + "/" + bundle.Name, Group: groupVolumes, Item: volume, State: progress.Warning, Message: "kept: " + strings.Join(still[volume], ", ") + " still uses it"})
 				}
 			} else {
 				parameters = map[string]string{cnab.ParameterPurge: strconv.FormatBool(purge)}
 			}
 		}
 		spec := storage.InstallationSpec{Name: bundle.Name, Stack: stackName, Parameters: parameters, Credentials: nemo.manifestCredentials(stackName, bundle)}
-		run, err := nemo.Uninstall(ctx, ActionRequest{InstallationSpec: spec, Progress: sharing.eventsOf(events, stackName, bundle.Name, nil)})
+		run, err := nemo.Uninstall(ctx, ActionRequest{InstallationSpec: spec, Progress: sink})
 		if run.Revision != "" {
 			mutex.Lock()
 			runs = append(runs, run)
