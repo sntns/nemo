@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -474,8 +475,10 @@ func (live *live) tally() string {
 // frameRow is the line of an installation or of a shared object, its columns
 // as plain text, and how each shows.
 type frameRow struct {
-	icon                     string
-	name, action, detail     string
+	icon                 string
+	name, action, detail string
+	// colored is the detail as it shows, when it has colors of its own.
+	colored                  string
 	elapsed                  string
 	nameStyle, actionStyle   lipgloss.Style
 	detailStyle, otherStyles lipgloss.Style
@@ -512,7 +515,8 @@ func (live *live) row(view *installationView) frameRow {
 		if view.kind != "" {
 			line.detail = view.message
 		} else {
-			line.detail, line.elapsed = doing(view), elapsed(view).String()
+			line.detail, line.colored = doing(view)
+			line.elapsed = elapsed(view).String()
 		}
 	}
 	return line
@@ -521,10 +525,14 @@ func (live *live) row(view *installationView) frameRow {
 // render lines the row up: the name and the detail padded to the widths.
 func (line frameRow) render(nameWidth, detailWidth int) string {
 	text := line.icon + " " + line.nameStyle.Render(fmt.Sprintf("%-*s", nameWidth, line.name)) + "  " + line.actionStyle.Render(fmt.Sprintf("%-9s", line.action)) + "  "
-	if line.elapsed == "" {
-		return text + line.detailStyle.Render(line.detail)
+	detail := line.detailStyle.Render(line.detail)
+	if line.colored != "" {
+		detail = line.colored
 	}
-	return text + line.detailStyle.Render(fmt.Sprintf("%-*s", detailWidth, line.detail)) + "  " + line.otherStyles.Render(line.elapsed)
+	if line.elapsed == "" {
+		return text + detail
+	}
+	return text + detail + strings.Repeat(" ", max(0, detailWidth-utf8.RuneCountInString(line.detail))) + "  " + line.otherStyles.Render(line.elapsed)
 }
 
 // sharedText is what became of a shared object, and how many share it.
@@ -542,11 +550,26 @@ func inTrouble(task progress.Event) bool {
 }
 
 // doing is what an installation at work is at: its images, then its
-// services, counted on a meter.
-func doing(view *installationView) string {
+// services, counted on a meter. It returns it as text, and as it shows: the
+// meter cyan on its way, green once full, yellow while a service is in
+// trouble.
+func doing(view *installationView) (string, string) {
+	count := func(done, total int, what string) (string, string) {
+		style := cyan
+		switch {
+		case slices.ContainsFunc(slices.Collect(maps.Values(view.tasks)), inTrouble):
+			style = yellow
+		case done == total:
+			style = green
+		}
+		cells := meter(done, total)
+		filled := strings.Count(cells, "▰")
+		text := fmt.Sprintf("%d/%d %s", done, total, what)
+		return cells + "  " + text, style.Render(cells[:filled*len("▰")]) + faint.Render(cells[filled*len("▰"):]) + "  " + text
+	}
 	switch {
 	case view.images.State == progress.Working:
-		return fmt.Sprintf("%s  loading images %d/%d", meter(int(view.images.Current), int(view.images.Total)), view.images.Current, view.images.Total)
+		return count(int(view.images.Current), int(view.images.Total), "images loaded")
 	case len(view.services) > 0:
 		ready := 0
 		for _, task := range view.tasks {
@@ -554,13 +577,13 @@ func doing(view *installationView) string {
 				ready++
 			}
 		}
-		state := "ready"
+		state := "services ready"
 		if view.action == "uninstall" {
-			state = "removed"
+			state = "services removed"
 		}
-		return fmt.Sprintf("%s  %d/%d services %s", meter(ready, len(view.services)), ready, len(view.services), state)
+		return count(ready, len(view.services), state)
 	}
-	return "starting"
+	return "starting", ""
 }
 
 // meterWidth is how many cells a meter has, whatever it counts.

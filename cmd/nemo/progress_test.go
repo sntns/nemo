@@ -228,6 +228,9 @@ func TestLive_compact(t *testing.T) {
 ⠋ runtime  install    ▰▰▰▰▰▱▱▱▱▱  1/2 services ready  D
     ◌ mongo  ▱        0/1   restarting: task: non-zero exit (1)
 ⠋ traefik  install    ▱▱▱▱▱▱▱▱▱▱  0/1 services ready  D`, frame, "one line each, but the service in trouble")
+	raw := compact.render(false)
+	assert.Contains(t, raw[2], yellow.Render("▰▰▰▰▰"), "a meter yellow while a service is in trouble")
+	assert.Contains(t, raw[4], faint.Render("▱▱▱▱▱▱▱▱▱▱"), "its empty cells faint")
 
 	full := &live{title: "demo", all: true}
 	events(full)
