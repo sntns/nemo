@@ -370,11 +370,21 @@ func (plan *upPlan) action(bundle cnab.ExtendedBundle) string {
 	return cnab.ActionInstall
 }
 
-// announce tells each installation pending, with its action.
+// announce tells each installation pending, with its action, and how many
+// services it has, when nemo knows.
 func (plan *upPlan) announce(events progress.Sink) {
 	for _, bundle := range plan.ordered {
-		events.Emit(progress.Event{Installation: plan.stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: plan.action(bundle)})
+		events.Emit(progress.Event{Installation: plan.stack.Name + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: plan.action(bundle), Total: serviceCount(plan.inventories[bundle.Name])})
 	}
+}
+
+// serviceCount counts the services an installation declares: none when nemo
+// does not know.
+func serviceCount(declared *inventory) int64 {
+	if declared == nil {
+		return 0
+	}
+	return int64(len(declared.services))
 }
 
 // validated returns the bundles that have a validate action, in order.
@@ -591,7 +601,7 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 			events.Emit(progress.Event{Installation: stackName, Group: key.group, Item: key.name, State: progress.Pending, Message: fmt.Sprintf("shared by %d installations", len(users[key]))})
 			continue
 		}
-		events.Emit(progress.Event{Installation: stackName + "/" + current.name, Group: progress.Installation, State: progress.Pending, Message: cnab.ActionUninstall})
+		events.Emit(progress.Event{Installation: stackName + "/" + current.name, Group: progress.Installation, State: progress.Pending, Message: cnab.ActionUninstall, Total: serviceCount(inventories[current.name])})
 	}
 	for _, warning := range warnings {
 		events.Emit(warning)

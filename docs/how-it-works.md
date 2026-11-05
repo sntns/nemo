@@ -109,7 +109,7 @@ What runs on the target is described by the labels on the target. What was asked
 
 gill reports what it does as events: images loading, networks and volumes created, and each service's containers (Compose) or tasks (Swarm) counted as they start, pass their health check or are verified to stay up, and run. nemo renders them:
 
-- **in a terminal**, as a view redrawn in place: a title that counts the installations done, at work and waiting, then a line per object installations share and a line per installation, in the stack's order, their columns lined up. An installation at work shows a meter of its services ready, and unfolds only those in trouble, failed or restarting: all of them when it is the only one at work, or with `--all`. One that failed unfolds them all, with gill's output;
+- **in a terminal**, as a view redrawn in place: a title that counts the installations done, at work and waiting, then a line per object installations share and a line per installation, in the stack's order, their columns lined up. An installation at work shows a meter of its services, a square each, up to ten, else each its share of them: green ready, cyan running while Swarm verifies it stays up or Compose checks its health, yellow on its way, red failed, empty not there yet. It unfolds only the services in trouble, failed or restarting: all of them when it is the only one at work, or with `--all`. One that failed unfolds them all, with gill's output;
 - **elsewhere**, a CI log for instance, as one line per change;
 - **with `--json`**, the records of the runs are also printed on standard output, for scripts.
 

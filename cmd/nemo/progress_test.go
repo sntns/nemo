@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 
@@ -67,7 +68,7 @@ func TestLive_uninstall(t *testing.T) {
 	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(live.render(false), "\n")), "D")
 	assert.Equal(t, `demo · 1 installation · 1 working
 
-⠋ web  uninstall  ▰▰▰▰▰▰▰▰▰▰  1/1 services removed  D
+⠋ web  uninstall  ▰           1/1 services removed  D
     ! volume demo_data kept: still in use
     ✔ web  removed`, frame, "no tasks to count for a service removed, and the warning in sight")
 }
@@ -225,21 +226,37 @@ func TestLive_compact(t *testing.T) {
 	frame := durations.ReplaceAllString(ansi.Strip(strings.Join(compact.render(false), "\n")), "D")
 	assert.Equal(t, `demo · 2 installations · 2 working
 
-⠋ runtime  install    ▰▰▰▰▰▱▱▱▱▱  1/2 services ready  D
+⠋ runtime  install    ▰▰          1/2 services ready  D
     ◌ mongo  ▱        0/1   restarting: task: non-zero exit (1)
-⠋ traefik  install    ▱▱▱▱▱▱▱▱▱▱  0/1 services ready  D`, frame, "one line each, but the service in trouble")
+⠋ traefik  install    ▰           0/1 services ready  D`, frame, "one line each, but the service in trouble")
 	raw := compact.render(false)
-	assert.Contains(t, raw[2], yellow.Render("▰▰▰▰▰"), "a meter yellow while a service is in trouble")
-	assert.Contains(t, raw[4], faint.Render("▱▱▱▱▱▱▱▱▱▱"), "its empty cells faint")
+	assert.Contains(t, raw[2], green.Render("▰")+yellow.Render("▰"), "a square a service, the color of its line: nats ready, mongo on its way")
+	assert.Contains(t, raw[4], cyan.Render("▰"), "gateway verified")
 
 	full := &live{title: "demo", all: true}
 	events(full)
 	frame = durations.ReplaceAllString(ansi.Strip(strings.Join(full.render(false), "\n")), "D")
 	assert.Equal(t, `demo · 2 installations · 2 working
 
-⠋ runtime  install    ▰▰▰▰▰▱▱▱▱▱  1/2 services ready  D
+⠋ runtime  install    ▰▰          1/2 services ready  D
     ◌ mongo    ▱        0/1   restarting: task: non-zero exit (1)
     ✔ nats     ▰        1/1   running
-⠋ traefik  install    ▱▱▱▱▱▱▱▱▱▱  0/1 services ready  D
+⠋ traefik  install    ▰           0/1 services ready  D
     ◌ gateway  ▰        1/1   verifying`, frame, "every service, their names lined up")
+}
+
+// A meter has a square for each service, up to ten, else each its share of
+// them, one at least for any state; those not there yet are empty.
+func TestMeter(t *testing.T) {
+	t.Parallel()
+	styles := []lipgloss.Style{green, cyan, yellow, red, faint}
+	text, _ := meter([]int{2, 1, 1, 0, 1}, styles)
+	assert.Equal(t, "▰▰▰▰▱     ", text, "five services, five squares")
+	text, _ = meter([]int{20, 0, 11, 1, 0}, styles)
+	assert.Equal(t, "▰▰▰▰▰▰▰▰▰▰", text, "thirty-two, ten squares")
+	assert.Equal(t, []int{5, 0, 4, 1, 0}, shares([]int{20, 0, 11, 1, 0}, 32), "the one that failed keeps a square")
+
+	view := &installationView{action: "install", expected: 5, tasks: map[string]progress.Event{"nats": {State: progress.Done}}, services: []string{"nats"}}
+	text, _ = doing(view)
+	assert.Equal(t, "▰▱▱▱▱       1/5 services ready", text, "the services not there yet count from the start")
 }

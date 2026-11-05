@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -32,6 +31,8 @@ type installationView struct {
 	objects  map[string]int
 	warnings []string
 	output   []string
+	// expected is how many services the installation has, when nemo told.
+	expected int
 	// kind is set on the row of an object installations share, the stack's
 	// own: network, volume, config or secret; users says who shares it.
 	kind  string
@@ -99,7 +100,7 @@ func (views *views) apply(event progress.Event) *installationView {
 		view.state = event.State
 		switch event.State {
 		case progress.Pending:
-			view.action = event.Message
+			view.action, view.expected = event.Message, int(event.Total)
 		case progress.Working:
 			view.action, view.started = event.Message, time.Now()
 		case progress.Done:
@@ -550,52 +551,103 @@ func inTrouble(task progress.Event) bool {
 }
 
 // doing is what an installation at work is at: its images, then its
-// services, counted on a meter. It returns it as text, and as it shows: the
-// meter cyan on its way, green once full, yellow while a service is in
-// trouble.
+// services, on a meter. It returns it as text, and as it shows.
 func doing(view *installationView) (string, string) {
-	count := func(done, total int, what string) (string, string) {
-		style := cyan
+	if view.images.State == progress.Working {
+		loaded := int(view.images.Current)
+		cells, colored := meter([]int{loaded, int(view.images.Total) - loaded}, []lipgloss.Style{green, faint})
+		text := fmt.Sprintf("%d/%d images loaded", loaded, view.images.Total)
+		return cells + "  " + text, colored + "  " + text
+	}
+	total := max(view.expected, len(view.services))
+	if total == 0 {
+		return "starting", ""
+	}
+	// A square for each service, the color of its line: green ready, cyan
+	// verified or checked, yellow on its way, red failed, faint not there yet.
+	counts := make([]int, 5)
+	for _, name := range view.services {
+		task := view.tasks[name]
 		switch {
-		case slices.ContainsFunc(slices.Collect(maps.Values(view.tasks)), inTrouble):
-			style = yellow
-		case done == total:
-			style = green
+		case task.State == progress.Done:
+			counts[0]++
+		case task.Message == "verifying" || task.Message == "checking health":
+			counts[1]++
+		case task.State == progress.Error:
+			counts[3]++
+		default:
+			counts[2]++
 		}
-		cells := meter(done, total)
-		filled := strings.Count(cells, "▰")
-		text := fmt.Sprintf("%d/%d %s", done, total, what)
-		return cells + "  " + text, style.Render(cells[:filled*len("▰")]) + faint.Render(cells[filled*len("▰"):]) + "  " + text
 	}
-	switch {
-	case view.images.State == progress.Working:
-		return count(int(view.images.Current), int(view.images.Total), "images loaded")
-	case len(view.services) > 0:
-		ready := 0
-		for _, task := range view.tasks {
-			if task.State == progress.Done {
-				ready++
-			}
-		}
-		state := "services ready"
-		if view.action == "uninstall" {
-			state = "services removed"
-		}
-		return count(ready, len(view.services), state)
+	counts[4] = total - len(view.services)
+	cells, colored := meter(counts, []lipgloss.Style{green, cyan, yellow, red, faint})
+	state := "services ready"
+	if view.action == "uninstall" {
+		state = "services removed"
 	}
-	return "starting", ""
+	text := fmt.Sprintf("%d/%d %s", counts[0], total, state)
+	return cells + "  " + text, colored + "  " + text
 }
 
-// meterWidth is how many cells a meter has, whatever it counts.
+// meterWidth is how many squares a meter has at most: one for each of what
+// it counts, or each its share of them.
 const meterWidth = 10
 
-// meter shows how much of the total is done, on cells of the same width.
-func meter(done, total int) string {
-	filled := meterWidth
-	if total > 0 && done < total {
-		filled = done * meterWidth / total
+// meter draws the counts as squares, in the styles, the last one empty:
+// one square each up to meterWidth, else their shares, one square at least
+// for any count. The text is padded to meterWidth, for the columns after.
+func meter(counts []int, styles []lipgloss.Style) (string, string) {
+	total := 0
+	for _, count := range counts {
+		total += count
 	}
-	return strings.Repeat("▰", filled) + strings.Repeat("▱", meterWidth-filled)
+	squares := slices.Clone(counts)
+	if total > meterWidth {
+		squares = shares(counts, total)
+	}
+	var text, colored strings.Builder
+	for i, count := range squares {
+		if count == 0 {
+			continue
+		}
+		glyph := "▰"
+		if i == len(squares)-1 {
+			glyph = "▱"
+		}
+		text.WriteString(strings.Repeat(glyph, count))
+		colored.WriteString(styles[i].Render(strings.Repeat(glyph, count)))
+	}
+	padding := strings.Repeat(" ", max(0, meterWidth-utf8.RuneCountInString(text.String())))
+	return text.String() + padding, colored.String() + padding
+}
+
+// shares splits meterWidth squares among the counts, by largest remainder,
+// and gives one to any count that has none, from the largest share.
+func shares(counts []int, total int) []int {
+	squares := make([]int, len(counts))
+	remainders := make([]int, len(counts))
+	given := 0
+	for i, count := range counts {
+		squares[i], remainders[i] = count*meterWidth/total, count*meterWidth%total
+		given += squares[i]
+	}
+	for ; given < meterWidth; given++ {
+		largest := 0
+		for i := range remainders {
+			if remainders[i] > remainders[largest] {
+				largest = i
+			}
+		}
+		squares[largest]++
+		remainders[largest] = -1
+	}
+	for i, count := range counts {
+		if count > 0 && squares[i] == 0 {
+			squares[i]++
+			squares[slices.Index(squares, slices.Max(squares))]--
+		}
+	}
+	return squares
 }
 
 // services are the lines of the services named, of an installation, the
