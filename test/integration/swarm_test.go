@@ -146,6 +146,26 @@ services:
 	assert.Equal(t, 1, running(b.tasks("web")))
 }
 
+// Swarm can't change the mode of a service: an upgrade that does recreates
+// it, as manta's telemetry agent went from one copy to one per node.
+func TestSwarm_changesTheModeOfAService(t *testing.T) {
+	b := newBench(t, nemoswarm.Name)
+	project := `
+services:
+  agent:
+    image: busybox:1.37
+    command: ["sleep", "3600"]
+    deploy:
+      mode: %s
+`
+	require.NoError(t, b.install(fmt.Sprintf(project, "replicated")))
+	require.NotNil(t, b.service("agent").Spec.Mode.Replicated)
+
+	require.NoError(t, b.upgrade(fmt.Sprintf(project, "global")), "recreated, not updated")
+	assert.NotNil(t, b.service("agent").Spec.Mode.Global)
+	assert.Equal(t, 1, running(b.tasks("agent")))
+}
+
 func TestSwarm_rollsBackAFailingUpdate(t *testing.T) {
 	b := newBench(t, nemoswarm.Name)
 	project := `

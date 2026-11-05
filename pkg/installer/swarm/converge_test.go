@@ -205,3 +205,13 @@ func TestObserve(t *testing.T) {
 	assert.Equal(t, "restarting: task: non-zero exit (1)", observe(replicated(0, 1), []swarm.Task{starting, failed}, ownUpdate{}).phase)
 	assert.Equal(t, "starting", observe(replicated(0, 1), []swarm.Task{starting}, ownUpdate{}).phase)
 }
+
+func TestModeOf(t *testing.T) {
+	t.Parallel()
+	one := uint64(1)
+	assert.Equal(t, "replicated", modeOf(swarm.ServiceMode{Replicated: &swarm.ReplicatedService{Replicas: &one}}))
+	assert.Equal(t, "global", modeOf(swarm.ServiceMode{Global: &swarm.GlobalService{}}))
+	assert.Equal(t, "replicated-job", modeOf(swarm.ServiceMode{ReplicatedJob: &swarm.ReplicatedJob{}}))
+	assert.Equal(t, "global-job", modeOf(swarm.ServiceMode{GlobalJob: &swarm.GlobalJob{}}))
+	assert.Equal(t, "replicated", modeOf(swarm.ServiceMode{}), "Swarm's default")
+}
