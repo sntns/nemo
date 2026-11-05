@@ -242,9 +242,11 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 }
 
 // createService creates the service, or updates it when its hash is not
-// the spec's, and returns its ID, what it did (created, updated or
-// unchanged) and which of its updates is nemo's. Swarm gets the credentials
-// of the image's registry for the nodes that pull it.
+// the spec's, and returns its ID, what it did (created, updated, recreated
+// or unchanged) and which of its updates is nemo's. Swarm can't change the
+// mode of a service, replicated, global or a job: one whose mode changes is
+// removed, and created again once its containers are gone. Swarm gets the
+// credentials of the image's registry for the nodes that pull it.
 func (orchestrator *Orchestrator) createService(ctx context.Context, project *installer.Project, spec *swarm.ServiceSpec) (string, string, ownUpdate, error) {
 	if err := orchestrator.resolve(ctx, spec); err != nil {
 		return "", "", ownUpdate{}, err
@@ -262,6 +264,15 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, project *in
 	case existing == nil:
 		id, err := orchestrator.docker.ServiceCreate(ctx, spec, registryAuth)
 		return id, "created", ownUpdate{changed: true}, err
+	case modeOf(existing.Spec.Mode) != modeOf(spec.Mode):
+		if err := orchestrator.docker.ServiceDelete(ctx, existing); err != nil {
+			return "", "", ownUpdate{}, err
+		}
+		if err := orchestrator.waitServicesGone(ctx, map[string]string{existing.ID: spec.Labels[labels.Service]}, progress.Discard); err != nil {
+			return "", "", ownUpdate{}, err
+		}
+		id, err := orchestrator.docker.ServiceCreate(ctx, spec, registryAuth)
+		return id, "recreated", ownUpdate{changed: true}, err
 	case existing.Spec.Labels[labels.Hash] != spec.Labels[labels.Hash]:
 		own := ownUpdate{changed: true}
 		if status := existing.UpdateStatus; status != nil && status.StartedAt != nil {
@@ -270,6 +281,19 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, project *in
 		return existing.ID, "updated", own, orchestrator.docker.ServiceUpdate(ctx, existing, spec, registryAuth)
 	}
 	return existing.ID, "unchanged", ownUpdate{}, nil
+}
+
+// modeOf names the mode of a service, as Swarm can't change it.
+func modeOf(mode swarm.ServiceMode) string {
+	switch {
+	case mode.Global != nil:
+		return "global"
+	case mode.ReplicatedJob != nil:
+		return "replicated-job"
+	case mode.GlobalJob != nil:
+		return "global-job"
+	}
+	return "replicated"
 }
 
 // resolve fills the IDs of the configs and secrets a service uses, external ones included.
