@@ -568,5 +568,5 @@ func TestStack_keepsItsRecordsOnTheTarget(t *testing.T) {
 
 	list, err := s.nemo("installation", "list")
 	require.NoError(t, err)
-	assert.Equal(t, len(bundles), strings.Count(list, "uninstalled"), "the first home sees the down of the other")
+	assert.Equal(t, len(bundles)+1, strings.Count(list, "uninstalled"), "the first home sees the down of the other, the network they share included")
 }

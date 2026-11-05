@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cnabio/cnab-go/bundle"
 	"github.com/cnabio/cnab-go/valuesource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -273,4 +274,45 @@ func TestUpSharesTheDefaultNetwork(t *testing.T) {
 	_, err := nemo.Up(context.Background(), UpRequest{Stack: demo, Progress: happened})
 	require.NoError(t, err)
 	assert.Contains(t, happened.events, progress.Event{Installation: "demo", Group: "networks", Item: "demo_default", State: progress.Pending, Message: "shared by 2 installations"})
+}
+
+// The bundle of a shared object declares it as its first user does:
+// rendered as its installer will render it, the object has the same name, a
+// config's or a secret's content, which a credential gives it, the same
+// hash.
+func TestSharedBundle(t *testing.T) {
+	t.Parallel()
+	_, _, bundleFile, _ := setup(t)
+	path := composed(t, writeBundle(t, filepath.Dir(bundleFile), "alpha"), map[string]any{
+		"services": map[string]any{"web": map[string]any{"image": "busybox:1.37", "networks": []any{"mesh"}, "volumes": []any{"data:/data"}, "configs": []any{"settings"}, "secrets": []any{"token"}}},
+		"networks": map[string]any{"mesh": map[string]any{"attachable": true}},
+		"volumes":  map[string]any{"data": map[string]any{}},
+		"configs":  map[string]any{"settings": map[string]any{"content": "level: debug"}},
+		"secrets":  map[string]any{"token": map[string]any{"environment": "TOKEN"}},
+	})
+	declarer, err := cnab.LoadBundle(path)
+	require.NoError(t, err)
+	declarer.Credentials = map[string]bundle.Credential{"token": {Location: bundle.Location{EnvironmentVariable: "TOKEN"}, ApplyTo: []string{cnab.ActionInstall}}}
+	request := runtime.Request{Bundle: declarer, Stack: "demo", Action: cnab.ActionInstall, Target: target.Target{Orchestrator: target.Swarm}}
+	declared, err := inventoryOf(context.Background(), request, valuesource.Set{"token": "s3cret"})
+	require.NoError(t, err)
+	alike := &inventory{objects: declared.objects}
+	shared, err := sharing([]string{"alpha", "bravo"}, map[string]*inventory{"alpha": declared, "bravo": alike})
+	require.NoError(t, err)
+	require.Len(t, shared, 4, "the network, the volume, the config and the secret")
+
+	for _, found := range shared {
+		made, values, err := sharedBundle(declarer, found)
+		require.NoError(t, err, found.node())
+		assert.Equal(t, found.node(), made.Name)
+		assert.Empty(t, made.Images, "no service, no image")
+		assert.Equal(t, declarer.InvocationImages, made.InvocationImages, "the installer of its first user")
+		own, err := inventoryOf(context.Background(), runtime.Request{Bundle: made, Stack: "demo", Action: cnab.ActionInstall, Target: request.Target}, values)
+		require.NoError(t, err, found.node())
+		assert.Equal(t, []object{found.object}, slices.Collect(maps.Keys(own.objects)), "%s declares the object alone, under its name", found.node())
+		assert.Empty(t, own.services)
+		key, isObject := sharedOf(made, own)
+		assert.True(t, isObject)
+		assert.Equal(t, found.object, key)
+	}
 }

@@ -349,11 +349,9 @@ func sharedBundle(base cnab.ExtendedBundle, shared sharedObject) (cnab.ExtendedB
 			declaration[installer.VolumeExtension] = volumeType
 		}
 	case types.ConfigObjConfig:
-		declaration = map[string]any{"name": config.Name, "environment": "NEMO_SHARED", "labels": config.Labels}
-		values = valuesource.Set{"nemo-shared": config.Content}
+		declaration, values = fileObject(config.Name, config.Labels), valuesource.Set{"nemo-shared": config.Content}
 	case types.SecretConfig:
-		declaration = map[string]any{"name": config.Name, "environment": "NEMO_SHARED", "labels": config.Labels}
-		values = valuesource.Set{"nemo-shared": config.Content}
+		declaration, values = fileObject(config.Name, config.Labels), valuesource.Set{"nemo-shared": config.Content}
 	default:
 		return cnab.ExtendedBundle{}, nil, fmt.Errorf("%s %s: nemo can't make it alone", shared.group, shared.name)
 	}
@@ -369,6 +367,16 @@ func sharedBundle(base cnab.ExtendedBundle, shared sharedObject) (cnab.ExtendedB
 	}
 	extended, err := cnab.NewBundle(made)
 	return extended, values, err
+}
+
+// fileObject declares a config or a secret of that name, read from the
+// credential that holds its content.
+func fileObject(name string, labels types.Labels) map[string]any {
+	declared := map[string]any{"name": name, "environment": "NEMO_SHARED"}
+	if len(labels) > 0 {
+		declared["labels"] = labels
+	}
+	return declared
 }
 
 // asMap turns a compose object into the document that declares it.

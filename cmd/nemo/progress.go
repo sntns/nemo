@@ -121,7 +121,7 @@ func (views *views) apply(event progress.Event) *installationView {
 	case event.Group == progress.Output:
 		view.output = append(view.output, event.Message)
 	case event.State == progress.Warning:
-		view.warnings = append(view.warnings, strings.TrimSpace(strings.TrimSuffix(event.Group, "s")+" "+event.Item+" "+event.Message))
+		view.warnings = append(view.warnings, words(strings.TrimSuffix(event.Group, "s"), event.Item, event.Message))
 	case event.Group == "services":
 		if _, seen := view.tasks[event.Item]; !seen {
 			view.services = append(view.services, event.Item)
@@ -260,7 +260,7 @@ func (lines *lines) Emit(event progress.Event) {
 	case event.Group == progress.Output && !view.repeats(event.Message):
 		say("%s", event.Message)
 	case event.State == progress.Warning:
-		say("warning: %s %s %s", event.Group, event.Item, event.Message)
+		say("warning: %s", words(event.Group, event.Item, event.Message))
 	case event.State == progress.Error:
 		say("%s %s failed: %s", strings.TrimSuffix(event.Group, "s"), event.Item, event.Message)
 	case event.Group == "services" && event.State == progress.Done:
@@ -528,4 +528,9 @@ func warnings(view *installationView) []string {
 		lines[i] = yellow.Render("    ! " + warning)
 	}
 	return lines
+}
+
+// words joins those that are not empty.
+func words(given ...string) string {
+	return strings.Join(slices.DeleteFunc(given, func(word string) bool { return word == "" }), " ")
 }
