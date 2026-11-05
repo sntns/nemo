@@ -1,6 +1,7 @@
 package nemo
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"slices"
@@ -93,4 +94,34 @@ func schedule(steps []step, limit int, act func(step step, announce func(object)
 		return fmt.Errorf("%s could not start: what they wait for never came", strings.Join(stuck, ", "))
 	}
 	return nil
+}
+
+// levelled sorts the steps by level, a step one level after the deepest of
+// the steps it comes after, and those of a level by name: the order they
+// can go in. The steps must have no cycle.
+func levelled(steps []step) []step {
+	level := map[string]int{}
+	var depth func(current step) int
+	byName := map[string]step{}
+	for _, current := range steps {
+		byName[current.name] = current
+	}
+	depth = func(current step) int {
+		if known, ok := level[current.name]; ok {
+			return known
+		}
+		deepest := 0
+		for _, name := range current.after {
+			if before, inSet := byName[name]; inSet {
+				deepest = max(deepest, depth(before)+1)
+			}
+		}
+		level[current.name] = deepest
+		return deepest
+	}
+	sorted := slices.Clone(steps)
+	slices.SortStableFunc(sorted, func(left, right step) int {
+		return cmp.Or(cmp.Compare(depth(left), depth(right)), cmp.Compare(left.name, right.name))
+	})
+	return sorted
 }

@@ -491,16 +491,8 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 	}
 	sharing := newSharingPlan(orderedNames(ordered), shared)
 
-	for _, bundle := range slices.Backward(ordered) {
-		events.Emit(progress.Event{Installation: stackName + "/" + bundle.Name, Group: progress.Installation, State: progress.Pending, Message: cnab.ActionUninstall})
-	}
-	sharing.announce(events, stackName)
-	for _, warning := range warnings {
-		events.Emit(warning)
-	}
-
 	var steps []step
-	for _, bundle := range slices.Backward(ordered) {
+	for _, bundle := range ordered {
 		after := sharing.leaveAfter(bundle.Name)
 		for _, other := range ordered {
 			if slices.Contains(stack.DependencyNames(other), bundle.Name) {
@@ -509,6 +501,16 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		}
 		steps = append(steps, step{name: bundle.Name, after: after})
 	}
+	// Shown, and started, in the order they go: by what each waits for, then by name.
+	steps = levelled(steps)
+	for _, current := range steps {
+		events.Emit(progress.Event{Installation: stackName + "/" + current.name, Group: progress.Installation, State: progress.Pending, Message: cnab.ActionUninstall})
+	}
+	sharing.announce(events, stackName)
+	for _, warning := range warnings {
+		events.Emit(warning)
+	}
+
 	var runs []Run
 	var mutex sync.Mutex
 	err = schedule(steps, limit, func(current step, _ func(object)) error {

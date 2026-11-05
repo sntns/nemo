@@ -137,9 +137,17 @@ func TestUpSharesAnObjectBetweenItsUsers(t *testing.T) {
 		assert.False(t, event.Installation == "demo" && strings.HasPrefix(event.Item, "demo_own"), "a network of one installation is its own: %v", event)
 	}
 
-	_, err = nemo.Down(context.Background(), DownRequest{Name: "demo"})
+	gone := &journal{}
+	_, err = nemo.Down(context.Background(), DownRequest{Name: "demo", Progress: gone})
 	require.NoError(t, err)
 	assert.Less(t, happened.index("end uninstall bravo"), happened.index("start uninstall alpha"), "the creator goes after the others")
+	var announced []string
+	for _, event := range gone.events {
+		if event.State == progress.Pending {
+			announced = append(announced, strings.TrimPrefix(event.Installation+" "+event.Item, "demo/"))
+		}
+	}
+	assert.Equal(t, []string{"bravo ", "charlie ", "delta ", "echo ", "alpha ", "demo demo_mesh"}, announced, "shown in the order they go, by name within a level, the shared network last")
 }
 
 func TestUpRefusesWhatCannotBeShared(t *testing.T) {
