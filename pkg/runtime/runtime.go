@@ -336,7 +336,7 @@ func loadImages(ctx context.Context, request Request, installation string, event
 			return nil, fmt.Errorf("target: images are loaded into one daemon, and this swarm has %d nodes: let them pull from a registry", nodes)
 		}
 	}
-	images := nemobundle.ImagesOf(request.Bundle, request.Relocation, request.Source)
+	images, named := needed(request, nemobundle.ImagesOf(request.Bundle, request.Relocation, request.Source))
 	// A Job runs the installer in the cluster, which pulls it from its registry.
 	if request.Installer.DriverName() == target.DriverKubernetes {
 		images = slices.DeleteFunc(images, func(image transfer.Image) bool { return image.Name == request.Bundle.InvocationImages[0].Image })
@@ -349,8 +349,31 @@ func loadImages(ctx context.Context, request Request, installation string, event
 	if relocated == nil {
 		relocated = relocation.ImageRelocationMap{}
 	}
+	maps.Copy(relocated, named)
 	maps.Copy(relocated, loaded)
 	return relocated, nil
+}
+
+// needed returns the images the action needs loaded, and where the others
+// would be once loaded. Only install and upgrade run the services: the
+// other actions need the installer alone, and the installer the names of
+// the others, which their digest makes.
+func needed(request Request, images []transfer.Image) ([]transfer.Image, relocation.ImageRelocationMap) {
+	named := relocation.ImageRelocationMap{}
+	if request.Action == cnab.ActionInstall || request.Action == cnab.ActionUpgrade {
+		return images, named
+	}
+	installer := request.Bundle.InvocationImages[0].Image
+	return slices.DeleteFunc(images, func(image transfer.Image) bool {
+		if image.Name == installer || image.Digest == "" {
+			return false
+		}
+		name, err := transfer.LoadedName(image.Name, image.Digest)
+		if err == nil {
+			named[image.Name] = name
+		}
+		return err == nil
+	}), named
 }
 
 // newDriver returns the driver the installer names, once it reached what it

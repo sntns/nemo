@@ -8,10 +8,6 @@ import (
 	"strings"
 )
 
-// parallelActions bounds the actions under way at once: each may load its
-// images into the target's one daemon.
-const parallelActions = 4
-
 // step is an action of an up or a down on one installation.
 type step struct {
 	name string
@@ -19,8 +15,8 @@ type step struct {
 	after []string
 }
 
-// schedule runs each step once the steps it comes after are done, at most
-// limit at once, starting them in the order given. After a step fails, it
+// schedule runs each step once the steps it comes after are done, starting
+// them in the order given, and at most limit at once when limit is above 0. After a step fails, it
 // starts no other, and waits for those under way: stopping an action
 // midway would leave its installation half done. The steps must have no
 // cycle.
@@ -42,7 +38,7 @@ func schedule(steps []step, limit int, act func(step step) error) error {
 	running := 0
 	for {
 		for _, current := range steps {
-			if len(errs) > 0 || running >= limit || started[current.name] || !ready(current) {
+			if len(errs) > 0 || limit > 0 && running >= limit || started[current.name] || !ready(current) {
 				continue
 			}
 			started[current.name] = true

@@ -135,7 +135,7 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err
 // time, as nemo can't tell what it shares.
 func (nemo *Nemo) prepare(ctx context.Context, plan *upPlan) ([]progress.Event, error) {
 	var warnings []progress.Event
-	plan.prepared, plan.inventories, plan.nodes, plan.limit = map[string]actionPlan{}, map[string]*inventory{}, map[string]sharedObject{}, parallelActions
+	plan.prepared, plan.inventories, plan.nodes, plan.limit = map[string]actionPlan{}, map[string]*inventory{}, map[string]sharedObject{}, 0
 	for _, bundle := range plan.ordered {
 		action := plan.action(bundle)
 		entry := plan.entries[bundle.Name]
@@ -243,7 +243,8 @@ type upPlan struct {
 	// installation acts, by the name of their installation.
 	shared []sharedObject
 	nodes  map[string]sharedObject
-	// limit is how many actions run at once.
+	// limit is how many actions run at once: one when nemo can't tell what
+	// the installations share, else as many as can.
 	limit int
 }
 
@@ -530,7 +531,7 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		return nil, fmt.Errorf("stack %s: %w", stackName, err)
 	}
 
-	limit, inventories := parallelActions, map[string]*inventory{}
+	limit, inventories := 0, map[string]*inventory{}
 	var warnings []progress.Event
 	for _, bundle := range ordered {
 		installation := installations[bundle.Name]
@@ -573,7 +574,7 @@ func (nemo *Nemo) uninstall(ctx context.Context, stackName string, installations
 		steps = append(steps, step{name: bundle.Name, after: after})
 	}
 	// An object installations shared before it had an installation of its own goes with the first of them, after the others.
-	if limit > 1 {
+	if limit != 1 {
 		shared, _ := sharing(orderedNames(ordered), inventories)
 		for _, found := range shared {
 			if slices.Contains(slices.Collect(maps.Values(objects)), found.object) {
