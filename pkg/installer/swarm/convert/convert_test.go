@@ -84,3 +84,24 @@ func TestConfig(t *testing.T) {
 	assert.Equal(t, "shared", external.Name)
 	assert.Nil(t, external.Data, "only referenced")
 }
+
+// A published port is one port, which fits the 16 bits of a port: a range,
+// a negative or a larger number is refused, never wrapped around.
+func TestEndpoint_publishedPort(t *testing.T) {
+	t.Parallel()
+	published := func(port string) (*types.DeployConfig, types.ServiceConfig) {
+		service := types.ServiceConfig{}
+		service.Ports = []types.ServicePortConfig{{Target: 80, Published: port, Protocol: "tcp"}}
+		return &types.DeployConfig{}, service
+	}
+	deploy, service := published("8080")
+	spec, err := endpoint(service, deploy)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(8080), spec.Ports[0].PublishedPort)
+
+	for _, port := range []string{"70000", "-1", "8000-8010"} {
+		deploy, service := published(port)
+		_, err := endpoint(service, deploy)
+		assert.ErrorContains(t, err, "from 0 to 65535", port)
+	}
+}

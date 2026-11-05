@@ -362,7 +362,8 @@ func extract(archive io.Reader, directory string) error {
 			return err
 		}
 		root, name, _ := strings.Cut(path.Clean(header.Name), "/")
-		if root != path.Base(mountPoint) || name != "" && !fs.ValidPath(name) {
+		// No .. at all, though fs.ValidPath refuses it already: the records name nothing with one.
+		if strings.Contains(header.Name, "..") || root != path.Base(mountPoint) || name != "" && !fs.ValidPath(name) {
 			return fmt.Errorf("%s: not a path in the volume", header.Name)
 		}
 		if name == "" {
