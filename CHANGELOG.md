@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.2](https://github.com/sntns/nemo/compare/v0.12.1...v0.12.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* refuse a .. in the records' archive before anything is made of it ([d0d0490](https://github.com/sntns/nemo/commit/d0d04907906665fe36e62fd17f5691657df0cb07))
+* refuse a .. in the records' archive before anything is made of it ([589c163](https://github.com/sntns/nemo/commit/589c1637e9a8fc9e6a057b3de7378931600244e3))
+
 ## [0.12.1](https://github.com/sntns/nemo/compare/v0.12.0...v0.12.1) (2026-11-05)
 
 
