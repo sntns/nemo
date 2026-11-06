@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.4](https://github.com/sntns/nemo/compare/v0.12.3...v0.12.4) (2026-11-06)
+
+
+### Bug Fixes
+
+* give a Swarm job no update policy of gill's ([a27f154](https://github.com/sntns/nemo/commit/a27f15473e2dc000c67bebf1f3ba5811da5fb535))
+* let a Swarm update continue past a failed task, unless the bundle says otherwise ([195196b](https://github.com/sntns/nemo/commit/195196bf4ab1f37bdf761d606c553a962921801c))
+
 ## [0.12.3](https://github.com/sntns/nemo/compare/v0.12.2...v0.12.3) (2026-11-06)
 
 
