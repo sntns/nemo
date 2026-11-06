@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.3](https://github.com/sntns/nemo/compare/v0.12.2...v0.12.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* build with Go 1.26.10 and klauspost/compress 1.20.2 ([97134aa](https://github.com/sntns/nemo/commit/97134aad0d35883cf368c90acb977905779b9b32))
+* resume a Swarm update that a failed task paused ([5866403](https://github.com/sntns/nemo/commit/5866403f959534d8107e4cbfcb55455163a0ef22))
+
 ## [0.12.2](https://github.com/sntns/nemo/compare/v0.12.1...v0.12.2) (2026-11-05)
 
 
