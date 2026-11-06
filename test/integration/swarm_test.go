@@ -166,6 +166,42 @@ services:
 	assert.Equal(t, 1, running(b.tasks("agent")))
 }
 
+// A task that fails once makes Swarm pause the update, with the other
+// replica still to update, and wait for someone: the installer resumes it.
+func TestSwarm_resumesAnUpdateSwarmPaused(t *testing.T) {
+	b := newBench(t, nemoswarm.Name)
+	project := `
+services:
+  web:
+    image: busybox:1.37
+    command: ["sh", "-c", %q]
+    environment:
+      VERSION: %s
+    volumes:
+      - marks:/marks
+    deploy:
+      replicas: 2
+      update_config:
+        parallelism: 1
+        failure_action: pause
+        monitor: 3s
+      restart_policy:
+        condition: any
+        delay: 1s
+volumes:
+  marks: {}
+`
+	require.NoError(t, b.install(fmt.Sprintf(project, "exec sleep 3600", "1")))
+
+	// The first task of the update fails, and marks it: the others run.
+	failsOnce := "[ -f /marks/failed ] || { touch /marks/failed; exit 1; }; exec sleep 3600"
+	require.NoError(t, b.upgrade(fmt.Sprintf(project, failsOnce, "2")), "resumed, not left paused")
+	service := b.service("web")
+	assert.Contains(t, service.Spec.TaskTemplate.ContainerSpec.Env, "VERSION=2")
+	assert.NotEqual(t, swarm.UpdateStatePaused, service.UpdateStatus.State)
+	assert.Equal(t, 2, running(b.tasks("web")))
+}
+
 func TestSwarm_rollsBackAFailingUpdate(t *testing.T) {
 	b := newBench(t, nemoswarm.Name)
 	project := `
