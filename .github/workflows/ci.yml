@@ -56,6 +56,8 @@ jobs:
     steps:
       - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
         with:
+          # Empty, or the action's default "stable" wins over go.mod, and the scan misses the standard library the release is built with.
+          go-version-input: ""
           go-version-file: go.mod
 
   workflows:
