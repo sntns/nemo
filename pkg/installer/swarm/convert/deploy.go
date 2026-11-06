@@ -88,9 +88,13 @@ func restartPolicy(source *types.RestartPolicy) *swarm.RestartPolicy {
 // update continue unless the bundle says otherwise: Swarm restarts the task,
 // as it does out of an update, while its default, pause, stops the update
 // for good on a task that failed once. Swarm fails some tasks it cancels
-// itself, in their preparation, when they are to start.
-func updateConfig(source *types.UpdateConfig) *swarm.UpdateConfig {
+// itself, in their preparation, when they are to start. A job gets no policy
+// of gill's: Swarm refuses one, as it runs a job again rather than update it.
+func updateConfig(source *types.UpdateConfig, job bool) *swarm.UpdateConfig {
 	if source == nil {
+		if job {
+			return nil
+		}
 		source = &types.UpdateConfig{}
 	}
 	parallelism := uint64(1)

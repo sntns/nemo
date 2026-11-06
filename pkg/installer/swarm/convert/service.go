@@ -61,13 +61,13 @@ func Service(namespace Namespace, project *types.Project, service types.ServiceC
 			RestartPolicy: restartPolicy(deploy.RestartPolicy),
 			LogDriver:     logDriver(service.Logging),
 		},
-		UpdateConfig:   updateConfig(deploy.UpdateConfig),
-		RollbackConfig: updateConfig(deploy.RollbackConfig),
 	}
 	var err error
 	if spec.Mode, err = serviceMode(service, deploy); err != nil {
 		return nil, err
 	}
+	job := spec.Mode.ReplicatedJob != nil || spec.Mode.GlobalJob != nil
+	spec.UpdateConfig, spec.RollbackConfig = updateConfig(deploy.UpdateConfig, job), updateConfig(deploy.RollbackConfig, job)
 	if spec.TaskTemplate.Placement, err = placement(service, deploy.Placement); err != nil {
 		return nil, err
 	}

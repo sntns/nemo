@@ -108,16 +108,18 @@ func TestEndpoint_publishedPort(t *testing.T) {
 }
 
 // An update or a rollback whose task fails continues unless the bundle says
-// otherwise: Swarm's own default, pause, never resumes by itself.
+// otherwise: Swarm's own default, pause, never resumes by itself. A job gets
+// no policy unless the bundle gives one: Swarm refuses it.
 func TestUpdateConfig_continuesByDefault(t *testing.T) {
 	t.Parallel()
 	for _, source := range []*types.UpdateConfig{nil, {}} {
-		config := updateConfig(source)
+		config := updateConfig(source, false)
 		assert.Equal(t, swarm.UpdateFailureActionContinue, config.FailureAction)
 		assert.Equal(t, uint64(1), config.Parallelism)
 	}
 	parallelism := uint64(3)
-	config := updateConfig(&types.UpdateConfig{FailureAction: "pause", Parallelism: &parallelism})
+	config := updateConfig(&types.UpdateConfig{FailureAction: "pause", Parallelism: &parallelism}, false)
 	assert.Equal(t, swarm.UpdateFailureActionPause, config.FailureAction)
 	assert.Equal(t, parallelism, config.Parallelism)
+	assert.Nil(t, updateConfig(nil, true))
 }

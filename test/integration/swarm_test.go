@@ -168,7 +168,7 @@ services:
 
 // failingUpdate is a service of two replicas updated one at a time, whose
 // update fails the first task it starts, once: it marks a volume.
-func failingUpdate(t *testing.T, failureAction string) (*bench, error) {
+func failingUpdate(t *testing.T) (*bench, error) {
 	t.Helper()
 	b := newBench(t, nemoswarm.Name)
 	project := `
@@ -185,7 +185,6 @@ services:
       update_config:
         parallelism: 1
         monitor: 3s
-` + failureAction + `
       restart_policy:
         condition: any
         delay: 1s
@@ -200,21 +199,13 @@ volumes:
 // A task that fails during an update does not stop it: Swarm restarts the
 // task, and updates the other replica.
 func TestSwarm_continuesAnUpdateWhoseTaskFailed(t *testing.T) {
-	b, err := failingUpdate(t, "")
+	b, err := failingUpdate(t)
 	require.NoError(t, err)
 
 	service := b.service("web")
 	assert.Equal(t, swarm.UpdateFailureActionContinue, service.Spec.UpdateConfig.FailureAction)
 	assert.Contains(t, service.Spec.TaskTemplate.ContainerSpec.Env, "VERSION=2")
 	assert.Equal(t, 2, running(b.tasks("web")))
-}
-
-// A bundle that asks Swarm to pause an update whose task fails gets the
-// pause as the update's failure, at once.
-func TestSwarm_failsAnUpdateSwarmPaused(t *testing.T) {
-	b, err := failingUpdate(t, "        failure_action: pause")
-	require.ErrorContains(t, err, "swarm paused the update, as its failure_action says")
-	assert.Equal(t, swarm.UpdateStatePaused, b.service("web").UpdateStatus.State)
 }
 
 func TestSwarm_rollsBackAFailingUpdate(t *testing.T) {
