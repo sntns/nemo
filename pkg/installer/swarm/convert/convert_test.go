@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/compose-spec/compose-go/v2/types"
+	"github.com/moby/moby/api/types/swarm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -104,4 +105,19 @@ func TestEndpoint_publishedPort(t *testing.T) {
 		_, err := endpoint(service, deploy)
 		assert.ErrorContains(t, err, "from 0 to 65535", port)
 	}
+}
+
+// An update or a rollback whose task fails continues unless the bundle says
+// otherwise: Swarm's own default, pause, never resumes by itself.
+func TestUpdateConfig_continuesByDefault(t *testing.T) {
+	t.Parallel()
+	for _, source := range []*types.UpdateConfig{nil, {}} {
+		config := updateConfig(source)
+		assert.Equal(t, swarm.UpdateFailureActionContinue, config.FailureAction)
+		assert.Equal(t, uint64(1), config.Parallelism)
+	}
+	parallelism := uint64(3)
+	config := updateConfig(&types.UpdateConfig{FailureAction: "pause", Parallelism: &parallelism})
+	assert.Equal(t, swarm.UpdateFailureActionPause, config.FailureAction)
+	assert.Equal(t, parallelism, config.Parallelism)
 }

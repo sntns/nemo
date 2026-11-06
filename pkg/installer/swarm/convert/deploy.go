@@ -84,19 +84,27 @@ func restartPolicy(source *types.RestartPolicy) *swarm.RestartPolicy {
 }
 
 // updateConfig converts update_config and rollback_config, so that the
-// update policy is the bundle's, not a forced one.
+// update policy is the bundle's, not a forced one. A failed task lets the
+// update continue unless the bundle says otherwise: Swarm restarts the task,
+// as it does out of an update, while its default, pause, stops the update
+// for good on a task that failed once. Swarm fails some tasks it cancels
+// itself, in their preparation, when they are to start.
 func updateConfig(source *types.UpdateConfig) *swarm.UpdateConfig {
 	if source == nil {
-		return nil
+		source = &types.UpdateConfig{}
 	}
 	parallelism := uint64(1)
 	if source.Parallelism != nil {
 		parallelism = *source.Parallelism
 	}
+	failureAction := swarm.FailureAction(source.FailureAction)
+	if failureAction == "" {
+		failureAction = swarm.UpdateFailureActionContinue
+	}
 	return &swarm.UpdateConfig{
 		Parallelism:     parallelism,
 		Delay:           time.Duration(source.Delay),
-		FailureAction:   swarm.FailureAction(source.FailureAction),
+		FailureAction:   failureAction,
 		Monitor:         time.Duration(source.Monitor),
 		MaxFailureRatio: source.MaxFailureRatio,
 		Order:           swarm.UpdateOrder(source.Order),

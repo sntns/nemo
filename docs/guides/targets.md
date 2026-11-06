@@ -21,7 +21,7 @@ target:
 | Replicas | `deploy.replicas` containers per service | `deploy.replicas` tasks, scheduled on the nodes |
 | Ordering | `depends_on`, with its conditions: started, healthy, completed | Each installation once its services converged |
 | Configs and secrets | Written into the containers | Docker configs and secrets, named after their content |
-| Updates | A container whose specification changed is recreated | Services updated with their `update_config`, configs and secrets rolled |
+| Updates | A container whose specification changed is recreated | Services updated with their `update_config` (a failed task lets the update continue, unless `failure_action` says otherwise), configs and secrets rolled |
 | Ready when | Every container reached the state its dependants wait for | Every service's tasks run, and stay up |
 | Swarm-only settings | Ignored, with a warning | Applied |
 
