@@ -223,7 +223,7 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 				report := func(running, desired uint64, phase string) {
 					events.Emit(progress.Event{Group: "services", Item: name, State: progress.Working, Current: int64(running), Total: int64(desired), Message: phase})
 				}
-				if err := orchestrator.converge(groupContext, ids[i], owns[i], orchestrator.resumer(project, specs.services[name]), report); err != nil {
+				if err := orchestrator.converge(groupContext, ids[i], owns[i], report); err != nil {
 					if ctx.Err() == nil && errors.Is(err, context.Canceled) {
 						return err
 					}
@@ -239,21 +239,6 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 		}
 	}
 	return nil
-}
-
-// resumer resumes an update of the service that Swarm paused, as a person
-// would with docker service update --force: the update's tasks start again,
-// with the image's registry credentials.
-func (orchestrator *Orchestrator) resumer(project *installer.Project, spec *swarm.ServiceSpec) func(context.Context, swarm.Service) error {
-	return func(ctx context.Context, service swarm.Service) error {
-		registryAuth, err := project.RegistryAuth.For(spec.TaskTemplate.ContainerSpec.Image)
-		if err != nil {
-			return err
-		}
-		resumed := service.Spec
-		resumed.TaskTemplate.ForceUpdate++
-		return orchestrator.docker.ServiceUpdate(ctx, &service, &resumed, registryAuth)
-	}
 }
 
 // createService creates the service, or updates it when its hash is not
