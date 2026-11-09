@@ -4,7 +4,7 @@ go 1.26.10
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/charmbracelet/x/ansi v0.11.9
@@ -17,7 +17,7 @@ require (
 	github.com/distribution/reference v0.6.1-0.20240718132515-8c942b0459df
 	github.com/docker/cli v29.9.2+incompatible
 	github.com/docker/go-connections v0.8.2
-	github.com/go-ozzo/ozzo-validation/v4 v4.4.1
+	github.com/go-ozzo/ozzo-validation/v4 v4.5.0
 	github.com/google/go-containerregistry v0.22.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/moby/docker-image-spec v1.3.1
@@ -31,9 +31,9 @@ require (
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/sync v0.24.0
 	golang.org/x/term v0.47.0
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/client-go v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/client-go v0.37.2
 )
 
 require (
