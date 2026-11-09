@@ -21,8 +21,10 @@ import (
 // project resolves its relative paths there.
 const AppDir = "/cnab/app"
 
-// Installation identifies what an operation installs. Its fields go on
-// every object the orchestrator creates.
+// Installation identifies what an operation installs. Its stack and bundle
+// go on every object the orchestrator creates. Its version and revision go on
+// a service, or a container in Compose, when an action creates or changes it,
+// out of what decides that it changes: a new version alone restarts nothing.
 type Installation struct {
 	Stack    string
 	Bundle   string
@@ -130,9 +132,8 @@ func LoadProject(ctx context.Context, operation Operation) (*Project, error) {
 		Compose:      compose,
 		Levels:       levels,
 		Labels: map[string]string{
-			labels.Stack:   installation.Stack,
-			labels.Bundle:  installation.Bundle,
-			labels.Version: installation.Version,
+			labels.Stack:  installation.Stack,
+			labels.Bundle: installation.Bundle,
 		},
 		Provisions:      provisions,
 		InvocationImage: operation.invocationImage(),

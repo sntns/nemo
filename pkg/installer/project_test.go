@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sntns/nemo/pkg/cnab"
+	"github.com/sntns/nemo/pkg/labels"
 )
 
 // withCompose replaces the bundle's compose documents.
@@ -127,6 +128,7 @@ func TestLoadProject_stack(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, stack, project.Installation.Stack, installation)
 		assert.Equal(t, stack, project.Compose.Name, installation)
+		assert.NotContains(t, project.Labels, labels.Version, "a new version alone changes no object")
 	}
 }
 
