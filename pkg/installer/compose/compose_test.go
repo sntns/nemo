@@ -147,19 +147,22 @@ func TestOwnership_volumeKeptBySwarm(t *testing.T) {
 	assert.False(t, docker.Owns(keptBySwarm, installer.VolumeOwner(installer.Installation{Stack: "staging"})), "nor another stack's data")
 }
 
-// engine is a Docker that has no container yet, and on which every
+// engine is a Docker that has the containers it is given, and on which every
 // container created runs at once.
 type engine struct {
 	client.APIClient
-	created int
+	containers []container.Summary
+	created    int
+	labels     map[string]string
 }
 
 func (engine *engine) ContainerList(ctx context.Context, options client.ContainerListOptions) (client.ContainerListResult, error) {
-	return client.ContainerListResult{}, nil
+	return client.ContainerListResult{Items: engine.containers}, nil
 }
 
 func (engine *engine) ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error) {
 	engine.created++
+	engine.labels = options.Config.Labels
 	return client.ContainerCreateResult{ID: fmt.Sprintf("%064d", engine.created)}, nil
 }
 
@@ -194,4 +197,40 @@ func TestCreateServices_progress(t *testing.T) {
 		"working 1/2 checking health",
 		"done 2/2 healthy",
 	}, events, "each container counted once it reached the state its dependants wait for")
+}
+
+func TestCreateService_version(t *testing.T) {
+	t.Parallel()
+	spec := func() *convert.ServiceSpec {
+		return &convert.ServiceSpec{
+			Name:     "web",
+			Replicas: 1,
+			Hash:     "spec",
+			Config:   &container.Config{Labels: map[string]string{labels.Stack: "demo", labels.Bundle: "nginx"}},
+		}
+	}
+	installation := installer.Installation{Stack: "demo", Bundle: "nginx", Version: "1.1.0", Revision: "02"}
+
+	t.Run("a new version alone keeps the container", func(t *testing.T) {
+		t.Parallel()
+		running := container.Summary{ID: "web-1", State: container.StateRunning, Labels: map[string]string{
+			labels.Hash: "spec", labels.Version: "1.0.0", labels.Revision: "01", convert.NumberLabel: "1",
+		}}
+		engine := &engine{containers: []container.Summary{running}}
+		orchestrator := &Orchestrator{docker: docker.New(engine)}
+		ids, err := orchestrator.createService(context.Background(), installation, spec(), progress.Discard)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"web-1"}, ids)
+		assert.Zero(t, engine.created)
+	})
+
+	t.Run("a container created carries the version and the revision", func(t *testing.T) {
+		t.Parallel()
+		engine := &engine{}
+		orchestrator := &Orchestrator{docker: docker.New(engine)}
+		_, err := orchestrator.createService(context.Background(), installation, spec(), progress.Discard)
+		require.NoError(t, err)
+		assert.Equal(t, "1.1.0", engine.labels[labels.Version])
+		assert.Equal(t, "02", engine.labels[labels.Revision])
+	})
 }

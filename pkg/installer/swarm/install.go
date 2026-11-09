@@ -260,6 +260,7 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, project *in
 		return "", "", ownUpdate{}, err
 	}
 	spec.Labels[labels.Revision] = project.Installation.Revision
+	spec.Labels[labels.Version] = project.Installation.Version
 	switch {
 	case existing == nil:
 		id, err := orchestrator.docker.ServiceCreate(ctx, spec, registryAuth)

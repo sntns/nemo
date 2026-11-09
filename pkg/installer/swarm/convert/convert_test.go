@@ -49,7 +49,7 @@ func TestService_labels(t *testing.T) {
 	assert.NotEmpty(t, spec.Labels[labels.Hash])
 }
 
-func TestHash_ignoresRevision(t *testing.T) {
+func TestHash_ignoresRevisionAndVersion(t *testing.T) {
 	t.Parallel()
 
 	project := &types.Project{Name: "demo"}
@@ -60,6 +60,7 @@ func TestHash_ignoresRevision(t *testing.T) {
 	before := spec.Labels[labels.Hash]
 
 	spec.Labels[labels.Revision] = "02"
+	spec.Labels[labels.Version] = "1.1.0"
 	after, err := Hash(spec)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)

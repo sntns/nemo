@@ -153,7 +153,7 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 		group, groupContext := errgroup.WithContext(ctx)
 		for _, name := range level {
 			spec := specs.services[name]
-			ids, err := orchestrator.createService(ctx, project.Installation.Revision, spec, events)
+			ids, err := orchestrator.createService(ctx, project.Installation, spec, events)
 			if err != nil {
 				events.Emit(progress.Event{Group: "services", Item: spec.Name, State: progress.Error, Message: err.Error()})
 				return fmt.Errorf("service %s: %w", spec.Name, err)
@@ -180,7 +180,7 @@ func (orchestrator *Orchestrator) createServices(ctx context.Context, project *i
 
 // createService keeps the containers whose hash is the spec's, starting them
 // when stopped, recreates the others, and deletes those beyond the replicas.
-func (orchestrator *Orchestrator) createService(ctx context.Context, revision string, spec *convert.ServiceSpec, events progress.Sink) ([]string, error) {
+func (orchestrator *Orchestrator) createService(ctx context.Context, installation installer.Installation, spec *convert.ServiceSpec, events progress.Sink) ([]string, error) {
 	existing, err := orchestrator.containers(ctx, spec)
 	if err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (orchestrator *Orchestrator) createService(ctx context.Context, revision st
 	for number := 1; number <= spec.Replicas; number++ {
 		replica, found := byNumber[number]
 		delete(byNumber, number)
-		id, err := orchestrator.replicate(ctx, revision, spec, number, fateOf(replica, found, spec.Hash), replica.ID)
+		id, err := orchestrator.replicate(ctx, installation, spec, number, fateOf(replica, found, spec.Hash), replica.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -242,7 +242,7 @@ func fateOf(replica container.Summary, found bool, hash string) fate {
 
 // replicate makes the container of the replica run the spec, as its fate
 // says, and returns its ID.
-func (orchestrator *Orchestrator) replicate(ctx context.Context, revision string, spec *convert.ServiceSpec, number int, fate fate, id string) (string, error) {
+func (orchestrator *Orchestrator) replicate(ctx context.Context, installation installer.Installation, spec *convert.ServiceSpec, number int, fate fate, id string) (string, error) {
 	switch fate {
 	case kept:
 		return id, nil
@@ -253,18 +253,19 @@ func (orchestrator *Orchestrator) replicate(ctx context.Context, revision string
 			return "", err
 		}
 	}
-	return orchestrator.createContainer(ctx, revision, spec, number)
+	return orchestrator.createContainer(ctx, installation, spec, number)
 }
 
 // createContainer creates the container of a replica, puts its configs and
 // secrets in it, and starts it.
-func (orchestrator *Orchestrator) createContainer(ctx context.Context, revision string, spec *convert.ServiceSpec, number int) (string, error) {
+func (orchestrator *Orchestrator) createContainer(ctx context.Context, installation installer.Installation, spec *convert.ServiceSpec, number int) (string, error) {
 	config := *spec.Config
 	config.Labels = labels.Merge(spec.Config.Labels, map[string]string{
 		convert.NumberLabel:     strconv.Itoa(number),
 		convert.ConfigHashLabel: spec.Hash,
 		labels.Hash:             spec.Hash,
-		labels.Revision:         revision,
+		labels.Revision:         installation.Revision,
+		labels.Version:          installation.Version,
 	})
 	id, err := orchestrator.docker.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Name:             convert.ContainerName(spec.Config.Labels[labels.Stack], spec.Name, number),
