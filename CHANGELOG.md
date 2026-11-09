@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.5](https://github.com/sntns/nemo/compare/v0.12.4...v0.12.5) (2026-11-09)
+
+
+### Bug Fixes
+
+* a new version alone restarts no service ([57e33f5](https://github.com/sntns/nemo/commit/57e33f5c197755cc5305638ee75a862d59388102))
+
 ## [0.12.4](https://github.com/sntns/nemo/compare/v0.12.3...v0.12.4) (2026-11-06)
 
 
