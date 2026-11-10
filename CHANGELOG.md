@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/sntns/nemo/compare/v0.13.0...v0.14.0) (2026-11-10)
+
+
+### Features
+
+* an installation provided outside the stack, which gives its outputs ([ef75ca8](https://github.com/sntns/nemo/commit/ef75ca883c185124e521c2ab59aa6ff5bbd4531d))
+
 ## [0.13.0](https://github.com/sntns/nemo/compare/v0.12.5...v0.13.0) (2026-11-10)
 
 
