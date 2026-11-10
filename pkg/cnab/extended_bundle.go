@@ -30,6 +30,7 @@ type ExtendedBundle struct {
 	Dependencies     *Dependencies
 	Compose          *Compose
 	ParameterSources *ParameterSources
+	OutputValues     *OutputValues
 }
 
 // NewBundle validates a bundle and decodes its extensions.
@@ -44,6 +45,7 @@ func NewBundle(bundle bundle.Bundle) (ExtendedBundle, error) {
 		read(DependenciesExtension, bundle, &extendedBundle.Dependencies),
 		read(ComposeExtension, bundle, &extendedBundle.Compose),
 		read(ParameterSourcesExtension, bundle, &extendedBundle.ParameterSources),
+		read(OutputsExtension, bundle, &extendedBundle.OutputValues),
 	); err != nil {
 		return ExtendedBundle{}, fmt.Errorf("invalid bundle: %w", err)
 	}

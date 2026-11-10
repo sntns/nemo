@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -590,4 +592,115 @@ func TestUpInParallel(t *testing.T) {
 		actions = append(actions, request.Action+" "+request.Bundle.Name)
 	}
 	assert.ElementsMatch(t, []string{"upgrade database", "upgrade cache"}, actions, "the cache ends, web does not start")
+}
+
+// writeOutputBundles writes a database that gives its URI, its own unless it is given one, and a web
+// application that reads it from the database's output.
+func writeOutputBundles(t *testing.T, directory string, sensitive bool) (database, web string) {
+	t.Helper()
+	write := func(name string, edit func(cnabBundle *bundle.Bundle)) string {
+		cnabBundle := bundle.Bundle{
+			SchemaVersion:      "1.2.0",
+			Name:               name,
+			Version:            "1.0.0",
+			InvocationImages:   []bundle.InvocationImage{{BaseImage: bundle.BaseImage{ImageType: "docker", Image: "gill:dev"}}},
+			RequiredExtensions: []string{cnab.DockerExtension.Key},
+			Custom:             map[string]any{cnab.DockerExtension.Key: map[string]any{}},
+			Definitions:        definition.Definitions{"string": &definition.Schema{Type: "string"}},
+			Parameters: map[string]bundle.Parameter{
+				"database-uri": {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "DATABASE_URI"}},
+			},
+		}
+		edit(&cnabBundle)
+		data, err := json.Marshal(cnabBundle)
+		require.NoError(t, err)
+		path := filepath.Join(directory, name+".json")
+		require.NoError(t, os.WriteFile(path, data, 0o600))
+		return path
+	}
+	database = write("database", func(cnabBundle *bundle.Bundle) {
+		cnabBundle.Definitions["nemo-output-uri"] = &definition.Schema{Type: "string", WriteOnly: &sensitive}
+		cnabBundle.Outputs = map[string]bundle.Output{"uri": {Definition: "nemo-output-uri", ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Path: "/cnab/app/outputs/uri"}}
+		cnabBundle.Custom[cnab.OutputsExtension.Key] = map[string]any{"uri": map[string]any{"value": "${DATABASE_URI:-postgres://database:5432/app}"}}
+	})
+	web = write("web", func(cnabBundle *bundle.Bundle) {
+		cnabBundle.RequiredExtensions = append(cnabBundle.RequiredExtensions, cnab.ParameterSourcesExtension.Key)
+		cnabBundle.Custom[cnab.DependenciesExtension.Key] = map[string]any{"requires": map[string]any{"database": map[string]any{"bundle": "registry.example.com/bundles/database:1.0.0"}}}
+		cnabBundle.Custom[cnab.ParameterSourcesExtension.Key] = map[string]any{
+			"database-uri": map[string]any{"priority": []any{"dependencies.output"}, "sources": map[string]any{"dependencies.output": map[string]any{"dependency": "database", "name": "uri"}}},
+		}
+	})
+	return database, web
+}
+
+// A parameter the bundle reads from an output of a dependency is the output's value with the
+// dependency's parameters, worked out before the dependency runs: a sensitive output, never
+// recorded, included, and with the dependency left alone.
+func TestUpGivesTheOutputOfADependency(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	database, web := writeOutputBundles(t, filepath.Dir(bundleFile), true)
+	demo := stack.Stack{
+		Name:   "demo",
+		Target: target.Target{Orchestrator: target.Compose},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: web}},
+			{Name: "database", Bundle: storage.BundleReference{File: database}},
+		},
+	}
+	requests := func() map[string]runtime.Request {
+		byName := map[string]runtime.Request{}
+		for _, request := range fake.requests {
+			byName[request.Bundle.Name] = request
+		}
+		return byName
+	}
+
+	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://database:5432/app", requests()["web"].Parameters["database-uri"], "the database's own")
+
+	demo.Installations[1].Parameters = map[string]string{"database-uri": "postgres://managed:5432/app"}
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://managed:5432/app", requests()["web"].Parameters["database-uri"], "the one the database is given")
+
+	fake.requests = nil
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo, Only: []string{"web"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web"}, slices.Collect(maps.Keys(requests())), "the database left alone")
+	assert.Equal(t, "postgres://managed:5432/app", requests()["web"].Parameters["database-uri"])
+
+	demo.Installations[0].Parameters = map[string]string{"database-uri": "postgres://elsewhere:5432/app"}
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://elsewhere:5432/app", requests()["web"].Parameters["database-uri"], "a parameter given wins over its source")
+}
+
+// An installation acted on alone reads the output of its dependency's last run, as nemo recorded it:
+// a sensitive output is not, and nemo up works it out instead.
+func TestInstallReadsTheRecordedOutputOfADependency(t *testing.T) {
+	t.Parallel()
+	for _, sensitive := range []bool{false, true} {
+		t.Run(fmt.Sprint("sensitive ", sensitive), func(t *testing.T) {
+			t.Parallel()
+			nemo, fake, bundleFile, _ := setup(t)
+			ctx := context.Background()
+			database, web := writeOutputBundles(t, filepath.Dir(bundleFile), sensitive)
+			compose := target.Target{Orchestrator: target.Compose}
+
+			fake.outputs = map[string]string{"uri": "postgres://database:5432/app"}
+			_, err := nemo.Install(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Stack: "demo"}, BundleSource: database, Target: compose})
+			require.NoError(t, err)
+			fake.outputs = nil
+			_, err = nemo.Install(ctx, ActionRequest{InstallationSpec: storage.InstallationSpec{Stack: "demo"}, BundleSource: web, Target: compose})
+			require.NoError(t, err)
+			if sensitive {
+				assert.NotContains(t, fake.last().Parameters, "database-uri", "never recorded")
+			} else {
+				assert.Equal(t, "postgres://database:5432/app", fake.last().Parameters["database-uri"])
+			}
+		})
+	}
 }

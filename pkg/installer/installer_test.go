@@ -328,3 +328,35 @@ func TestHeldApart(t *testing.T) {
 	assert.False(t, HeldApart(Installation{Stack: "demo", Bundle: "network.demo_mesh"}, held, "networks", "demo_mesh"), "its own installation removes it")
 	assert.False(t, HeldApart(Installation{Stack: "demo", Bundle: "web"}, map[string]string{labels.Stack: "demo", labels.Bundle: "api"}, "networks", "demo_mesh"), "one another installation created is shared as it always was")
 }
+
+// An install writes the outputs, interpolated with the parameters; a validate writes none.
+func TestRun_outputs(t *testing.T) {
+	t.Parallel()
+	withOutput := func(cnabBundle *bundle.Bundle) {
+		cnabBundle.Definitions = definition.Definitions{
+			"string":          &definition.Schema{Type: "string"},
+			"nemo-output-uri": &definition.Schema{Type: "string"},
+		}
+		cnabBundle.Parameters = map[string]bundle.Parameter{
+			cnab.ParameterOrchestrator: {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "NEMO_ORCHESTRATOR"}},
+			"database-uri":             {Definition: "string", Destination: &bundle.Location{EnvironmentVariable: "DATABASE_URI"}},
+		}
+		cnabBundle.Outputs = map[string]bundle.Output{
+			"uri": {Definition: "nemo-output-uri", ApplyTo: []string{cnab.ActionInstall, cnab.ActionUpgrade}, Path: "/cnab/app/outputs/uri"},
+		}
+		cnabBundle.Custom[cnab.OutputsExtension.Key] = map[string]any{"uri": map[string]any{"value": "${DATABASE_URI:-postgres://database:5432/app}"}}
+	}
+	run := func(t *testing.T, environment map[string]string) map[string]string {
+		written := map[string]string{}
+		box := container(t, testBundle(withOutput), environment, nil)
+		box.WriteFile = func(path string, data []byte) error { written[path] = string(data); return nil }
+		operation, err := ReadOperation(box)
+		require.NoError(t, err)
+		require.NoError(t, Run(context.Background(), operation, newTarget().Orchestrators(), progress.Discard))
+		return written
+	}
+
+	assert.Equal(t, map[string]string{"/cnab/app/outputs/uri": "postgres://database:5432/app"}, run(t, map[string]string{"NEMO_ORCHESTRATOR": "swarm"}), "its own")
+	assert.Equal(t, map[string]string{"/cnab/app/outputs/uri": "postgres://managed:5432/app"}, run(t, map[string]string{"NEMO_ORCHESTRATOR": "swarm", "DATABASE_URI": "postgres://managed:5432/app"}), "the one it is given")
+	assert.Empty(t, run(t, map[string]string{EnvAction: cnab.ActionValidate, "NEMO_ORCHESTRATOR": "swarm"}), "a validate changes nothing")
+}

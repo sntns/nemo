@@ -15,6 +15,7 @@ The [Cloud Native Application Bundle](https://cnab.io) specification describes a
 | [Dependencies](https://github.com/cnabio/cnab-spec/blob/main/500-CNAB-dependencies.md) | `io.cnab.dependencies`: a bundle requires others, with version ranges. |
 | [Credential sets](https://github.com/cnabio/cnab-spec/blob/main/802-credential-sets.md) | A stack's credentials: `path`, `env`, `command` and `value` sources. |
 | [Docker extension](https://github.com/cnabio/cnab-spec/blob/main/810-well-known-custom-extensions.md) | Every nemo bundle requires `io.cnab.docker`: its installer needs the Docker socket. |
+| [Parameter sources](https://github.com/cnabio/cnab-spec/blob/main/810-well-known-custom-extensions.md) | `io.cnab.parameter-sources`: a parameter read from an output of the installation's last runs, `output`, or from an output of a dependency, `dependencies.output`, which Porter adds and the specification does not define. |
 
 ## OCI
 

@@ -17,8 +17,15 @@ A top-level block of one of the compose files given to `nemo bundle build`.
 | `dependencies.requires.<label>.bundle` | string | A bundle this one requires: its repository, `REGISTRY/PATH/NAME`. Its last part is the bundle's name. |
 | `dependencies.requires.<label>.version.ranges` | list of strings | Semantic version ranges, any of which the dependency must satisfy: `">=2.0.0 <3.0.0"`. |
 | `dependencies.requires.<label>.version.prereleases` | boolean | Whether prereleases satisfy the ranges. |
+| `outputs.<name>.value` | string | **Required.** The output's value, interpolated with the bundle's parameters as the compose is. Its name is made of lowercase letters, digits and dashes. |
+| `outputs.<name>.description` | string | |
+| `outputs.<name>.sensitive` | boolean | Keeps the value out of what nemo records and prints. |
+| `parameters.<name>.source.dependency` | string | **Required.** The key in `dependencies.requires` of the dependency the parameter is read from. The parameter is a variable of the compose. |
+| `parameters.<name>.source.output` | string | **Required.** The output of the dependency the parameter is read from. |
 
 `dependencies` is written as the CNAB [dependencies specification](https://github.com/cnabio/cnab-spec/blob/main/500-CNAB-dependencies.md) writes it, and copied into the bundle's `io.cnab.dependencies` extension.
+
+Each output is a CNAB output of the bundle, written at `/cnab/app/outputs/<name>` on install and upgrade, with a write-only definition when sensitive; its value is in the `io.nemo.outputs` extension. Each parameter's source is in the `io.cnab.parameter-sources` extension, as a `dependencies.output` source, which the bundle then requires.
 
 ## `x-nemo-volume`
 
@@ -77,7 +84,9 @@ Besides CNAB's `install`, `upgrade` and `uninstall`, every nemo bundle declares 
 |---|---|---|
 | `io.cnab.docker` | Yes | The runtime: gill needs the target's Docker socket. |
 | `io.cnab.dependencies` | No | The runtime: the order of a stack's installations. |
+| `io.cnab.parameter-sources` | When a parameter is read from an output | The runtime: the output a parameter is read from, of the installation or of a dependency. |
 | `io.nemo.compose` | No | gill: the compose project to deploy. |
+| `io.nemo.outputs` | No | gill, which writes the outputs, and the runtime, which works them out for the dependants. |
 
 `io.nemo.compose` is deliberately not required: a CNAB runtime refuses bundles that require extensions it does not know, and gill is the only one that needs to read it.
 

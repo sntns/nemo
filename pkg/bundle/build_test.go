@@ -145,3 +145,127 @@ func TestParseLocation(t *testing.T) {
 	_, err := ParseLocation("ghcr.io/sntns/faas")
 	require.Error(t, err)
 }
+
+// A database gives its URI to the bundles that require it: its own, or the one it is given.
+const database = `x-nemo-bundle:
+  name: database
+  version: 1.0.0
+  outputs:
+    uri:
+      description: The URI of the database.
+      value: ${DATABASE_URI:-postgres://app:secret@database:5432/app}
+      sensitive: true
+services:
+  database:
+    image: database:latest
+`
+
+// The application reads the database's URI from its output.
+const application = `x-nemo-bundle:
+  name: application
+  version: 1.0.0
+  dependencies:
+    requires:
+      database:
+        bundle: ghcr.io/example/database
+  parameters:
+    database-uri:
+      source:
+        dependency: database
+        output: uri
+services:
+  application:
+    image: application:latest
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+`
+
+func buildCompose(t *testing.T, project, image string) (cnab.ExtendedBundle, error) {
+	t.Helper()
+	directory := t.TempDir()
+	composeFile := filepath.Join(directory, "compose.yaml")
+	layout := filepath.Join(directory, "image.oci")
+	testimage.Write(t, layout)
+	require.NoError(t, os.WriteFile(composeFile, []byte(project), 0o644))
+	return Build(context.Background(), BuildRequest{
+		ComposeFiles: []string{composeFile},
+		Images:       map[string]string{image: "oci:" + layout},
+		Installer:    "gill:dev",
+	})
+}
+
+func TestBuild_outputs(t *testing.T) {
+	t.Parallel()
+	built, err := buildCompose(t, database, "database:latest")
+	require.NoError(t, err)
+
+	output := built.Outputs["uri"]
+	assert.Equal(t, "/cnab/app/outputs/uri", output.Path)
+	assert.Equal(t, []string{cnab.ActionInstall, cnab.ActionUpgrade}, output.ApplyTo)
+	assert.Equal(t, "The URI of the database.", output.Description)
+	definition := built.Definitions[output.Definition]
+	require.NotNil(t, definition.WriteOnly)
+	assert.True(t, *definition.WriteOnly, "sensitive")
+
+	require.NotNil(t, built.OutputValues)
+	assert.Equal(t, "${DATABASE_URI:-postgres://app:secret@database:5432/app}", (*built.OutputValues)["uri"].Value, "left for the installer to interpolate")
+	assert.Equal(t, "DATABASE_URI", built.Parameters["database-uri"].Destination.EnvironmentVariable, "a variable of an output is a parameter")
+
+	value, err := built.OutputValue("uri", built.OutputLookup(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://app:secret@database:5432/app", value, "its own")
+	value, err = built.OutputValue("uri", built.OutputLookup(map[string]string{"database-uri": "postgres://managed:5432/app"}))
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://managed:5432/app", value, "the one it is given")
+}
+
+func TestBuild_parameterSources(t *testing.T) {
+	t.Parallel()
+	built, err := buildCompose(t, application, "application:latest")
+	require.NoError(t, err)
+
+	require.NotNil(t, built.ParameterSources)
+	dependency, output, ok := (*built.ParameterSources)["database-uri"].DependencyOutput()
+	assert.True(t, ok)
+	assert.Equal(t, "database", dependency)
+	assert.Equal(t, "uri", output)
+	assert.True(t, built.IsSourced("database-uri"))
+	assert.Contains(t, built.RequiredExtensions, cnab.ParameterSourcesExtension.Key)
+	assert.NoError(t, built.CheckRequiredExtensions(), "nemo honours its source")
+}
+
+func TestBuild_outputsAndSourcesRefused(t *testing.T) {
+	t.Parallel()
+	_, err := buildCompose(t, `x-nemo-bundle:
+  name: application
+  version: 1.0.0
+  dependencies:
+    requires:
+      database:
+        bundle: ghcr.io/example/database
+  outputs:
+    URL:
+      value: http://application
+    empty:
+      value: ""
+  parameters:
+    cache-uri:
+      source:
+        dependency: database
+        output: uri
+    database-uri:
+      source:
+        dependency: cache
+        output: uri
+services:
+  application:
+    image: application:latest
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+`, "application:latest")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outputs.URL: an output is named with lowercase letters, digits and dashes")
+	assert.Contains(t, err.Error(), "outputs.empty: give it a value")
+	assert.Contains(t, err.Error(), "parameters.cache-uri: no variable of the compose is this parameter")
+	assert.Contains(t, err.Error(), "parameters.database-uri.source.dependency: cache is not in dependencies.requires")
+}

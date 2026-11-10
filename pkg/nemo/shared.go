@@ -324,7 +324,7 @@ func sharedBundle(base cnab.ExtendedBundle, shared sharedObject) (cnab.ExtendedB
 	}
 	made.Custom = map[string]any{}
 	for key, value := range base.Custom {
-		if key != cnab.ComposeExtension.Key && key != cnab.DependenciesExtension.Key && key != cnab.ParameterSourcesExtension.Key {
+		if key != cnab.ComposeExtension.Key && key != cnab.DependenciesExtension.Key && key != cnab.ParameterSourcesExtension.Key && key != cnab.OutputsExtension.Key {
 			made.Custom[key] = value
 		}
 	}

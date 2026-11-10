@@ -336,41 +336,68 @@ func (nemo *Nemo) plan(ctx context.Context, action string, request ActionRequest
 }
 
 // sourceParameters gives each parameter the bundle reads from an output, and
-// the action is not given, the output of the installation's last run that
-// has it.
+// the action is not given, the output of the last run that has it: of the
+// installation, or of the installation of a dependency of the bundle in the
+// stack. A sensitive output is not recorded: nemo up works it out instead.
 func (nemo *Nemo) sourceParameters(ctx context.Context, plan *actionPlan, action, name string) error {
 	if plan.bundle.ParameterSources == nil {
 		return nil
 	}
-	records := nemo.records(plan.stack)
-	var results []cnab.Result
+	results := map[string][]cnab.Result{}
 	for parameter, source := range *plan.bundle.ParameterSources {
 		declaration, declared := plan.bundle.Parameters[parameter]
-		output, fromOutput := source.Output()
-		if _, given := plan.parameters[parameter]; given || !declared || !fromOutput || !declaration.AppliesTo(action) {
+		if _, given := plan.parameters[parameter]; given || !declared || !declaration.AppliesTo(action) {
 			continue
 		}
-		if results == nil {
-			var err error
-			if results, err = records.ListResults(ctx, plan.stack, name); err != nil && !errors.Is(err, storage.ErrNotFound) {
-				return err
+		installation, output, ok := name, "", false
+		if output, ok = source.Output(); !ok {
+			var key string
+			if key, output, ok = source.DependencyOutput(); ok && plan.bundle.Dependencies != nil {
+				var err error
+				if installation, err = plan.bundle.Dependencies.Requires[key].BundleName(); err != nil {
+					return fmt.Errorf("parameter %s: dependency %s: %w", parameter, key, err)
+				}
 			}
 		}
-		for _, result := range slices.Backward(results) {
-			outputs, err := records.GetOutputs(ctx, plan.stack, name, result.ID)
-			if err != nil {
-				return err
+		if !ok {
+			continue
+		}
+		value, found, err := nemo.lastOutput(ctx, plan.stack, installation, output, results)
+		if err != nil {
+			return err
+		}
+		if found {
+			if plan.parameters == nil {
+				plan.parameters = map[string]string{}
 			}
-			if value, ok := outputs[output]; ok && value != Redacted {
-				if plan.parameters == nil {
-					plan.parameters = map[string]string{}
-				}
-				plan.parameters[parameter] = value
-				break
-			}
+			plan.parameters[parameter] = value
 		}
 	}
 	return nil
+}
+
+// lastOutput is the output of the installation's last run that recorded it,
+// its results read once into results.
+func (nemo *Nemo) lastOutput(ctx context.Context, stack, installation, output string, results map[string][]cnab.Result) (string, bool, error) {
+	records := nemo.records(stack)
+	listed, read := results[installation]
+	if !read {
+		var err error
+		if listed, err = records.ListResults(ctx, stack, installation); err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return "", false, err
+		}
+		results[installation] = listed
+	}
+	for _, result := range slices.Backward(listed) {
+		outputs, err := records.GetOutputs(ctx, stack, installation, result.ID)
+		if err != nil {
+			return "", false, err
+		}
+		if value, ok := outputs[output]; ok && value != Redacted {
+			return value, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 // givenBundle is the request's bundle: the one loaded already, else the one

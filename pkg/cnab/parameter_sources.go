@@ -22,8 +22,13 @@ type ParameterSource struct {
 	Sources  map[string]json.RawMessage `json:"sources"`
 }
 
-// SourceOutput is the type of a source that is an output of the installation.
-const SourceOutput = "output"
+const (
+	// SourceOutput is the type of a source that is an output of the installation.
+	SourceOutput = "output"
+	// SourceDependencyOutput is the type of a source that is an output of a
+	// dependency, as Porter adds it: the spec defines only SourceOutput.
+	SourceDependencyOutput = "dependencies.output"
+)
 
 // Output is the output the parameter is read from, when it has one.
 func (source ParameterSource) Output() (string, bool) {
@@ -36,6 +41,21 @@ func (source ParameterSource) Output() (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// DependencyOutput is the dependency, by its key in requires, and the output
+// of it the parameter is read from, when it has one.
+func (source ParameterSource) DependencyOutput() (dependency, output string, ok bool) {
+	for _, kind := range source.Priority {
+		var from struct {
+			Dependency string `json:"dependency"`
+			Name       string `json:"name"`
+		}
+		if kind == SourceDependencyOutput && json.Unmarshal(source.Sources[kind], &from) == nil && from.Dependency != "" && from.Name != "" {
+			return from.Dependency, from.Name, true
+		}
+	}
+	return "", "", false
 }
 
 // IsSourced reports whether the parameter is read from a source when an

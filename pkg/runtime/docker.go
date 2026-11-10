@@ -38,7 +38,7 @@ import (
 const dockerSocket = "/var/run/docker.sock"
 
 // outputsDirectory is where the invocation image writes its outputs.
-const outputsDirectory = "/cnab/app/outputs"
+const outputsDirectory = cnab.OutputsDirectory
 
 // dockerDriver runs the invocation image on the target's Docker over the
 // Engine API, as cnab-go's docker driver does: the image pulled with the

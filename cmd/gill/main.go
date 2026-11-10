@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/sntns/nemo/pkg/installer"
@@ -34,9 +35,18 @@ func main() {
 func run(events progress.Sink) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	operation, err := installer.ReadOperation(installer.Container{LookupEnv: os.LookupEnv, FS: os.DirFS("/")})
+	operation, err := installer.ReadOperation(installer.Container{LookupEnv: os.LookupEnv, FS: os.DirFS("/"), WriteFile: writeFile})
 	if err != nil {
 		return err
 	}
 	return installer.Run(ctx, operation, orchestrators, events)
+}
+
+// writeFile writes a file of the container, readable by its user alone: an
+// output may be sensitive.
+func writeFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }

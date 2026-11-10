@@ -12,7 +12,7 @@
                     "description": "Array of source types in the priority order that they should be used to populated the parameter",
                     "items": {
                         "type": "string",
-                        "enum": ["output"]
+                        "enum": ["output", "dependencies.output"]
                     },
                     "minItems": 1
                 },
@@ -20,7 +20,8 @@
                     "type": "object",
                     "description": "A map of key/value pairs of a source type and definition for the parameter value",
                     "properties": {
-                        "output": { "$ref": "#/definitions/output" }
+                        "output": { "$ref": "#/definitions/output" },
+                        "dependencies.output": { "$ref": "#/definitions/dependency-output" }
                     },
                     "additionalProperties": false,
                     "minProperties": 1
@@ -41,6 +42,24 @@
             },
             "additionalProperties": false,
             "required": ["name"]
+        },
+        "dependency-output": {
+            "type": "object",
+            "description": "Specifies that the source of the parameter is an output of a dependency",
+            "properties": {
+                "dependency": {
+                    "type": "string",
+                    "description": "The dependency's key in the requires of io.cnab.dependencies",
+                    "minLength": 1
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the dependency's output",
+                    "minLength": 1
+                }
+            },
+            "additionalProperties": false,
+            "required": ["dependency", "name"]
         }
     },
     "type": "object",
