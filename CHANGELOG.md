@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/sntns/nemo/compare/v0.12.5...v0.13.0) (2026-11-10)
+
+
+### Features
+
+* a bundle gives outputs, and reads a parameter from a dependency's ([4bae86a](https://github.com/sntns/nemo/commit/4bae86ad831c489d2f9f9f4a6b751a86948b72e1))
+
 ## [0.12.5](https://github.com/sntns/nemo/compare/v0.12.4...v0.12.5) (2026-11-09)
 
 
