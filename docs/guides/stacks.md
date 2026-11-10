@@ -131,6 +131,26 @@ installations:
 
 An override has the trust of the stack: like the manifest, it decides what runs, ports and mounts included. A bundle built by nemo 0.10 or before can't take one: build it again.
 
+## External installations
+
+A bundle can be provided outside the stack: a managed database instead of the `database` bundle the `api` requires. The installation is then **external**: nemo deploys nothing for it, and the stack gives the outputs the bundles that require it read.
+
+```yaml
+installations:
+  - name: api
+    bundle: { version: 1.4.0 }
+  - name: database
+    external:
+      outputs:
+        uri: { env: SHOP_DATABASE_URI }
+```
+
+- **Its outputs** are read as credentials are, from `env`, `path`, `command` or `value`, once per `nemo up`: the `api` reads `database-uri` from the output `uri` of `database` ([outputs](bundles.md#outputs)), the managed one's here. An output a dependant reads that the stack does not give stops `nemo up` before it starts.
+- **Its dependants** are satisfied: nemo neither checks its version, it has none, nor looks for the `database` bundle. It has no bundle, parameters, credentials or override.
+- **Switching**: an installation nemo installed that becomes external is uninstalled at the next `nemo up`, once the others are done; its volumes stay, unless `--purge`. Back to a bundle, nemo installs it again.
+
+`nemo up database` refuses an external installation, which has nothing to act on.
+
 ## Keeping stacks
 
 nemo keeps stacks by name in its home directory, `~/.nemo` (or `$NEMO_HOME`), and one of them is the **current stack**: commands act on it unless given `--stack NAME`. With shell completion (`nemo completion --help`), Tab completes the names of the stacks, of their installations and of their services.

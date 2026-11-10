@@ -102,6 +102,11 @@ func Read(path string) (Stack, error) {
 		for j, strategy := range installation.Credentials {
 			stack.Installations[i].Credentials[j] = credentials.Absolute(strategy, directory)
 		}
+		if external := installation.External; external != nil {
+			for name, source := range external.Outputs {
+				external.Outputs[name] = credentials.Absolute(valuesource.Strategy{Source: source}, directory).Source
+			}
+		}
 		if installation.Stack == "" {
 			stack.Installations[i].Stack = stack.Name
 		}
@@ -118,12 +123,13 @@ const (
 // stackName is a stack's name: a directory of the store.
 var stackName = regexp.MustCompile(`^[^/\\]+$`)
 
-// Validate checks the stack: its installations are its own, and one whose
-// bundle has a version alone needs the remote to locate it.
+// Validate checks the stack: its installations are its own, one whose
+// bundle has a version alone needs the remote to locate it, and an external
+// one gives its outputs alone.
 func (stack Stack) Validate() error {
 	var byRemote []string
 	for _, installation := range stack.Installations {
-		if installation.Bundle.File == "" && installation.Bundle.Repository == "" {
+		if installation.External == nil && installation.Bundle.File == "" && installation.Bundle.Repository == "" {
 			byRemote = append(byRemote, installation.Name)
 		}
 	}
@@ -136,6 +142,9 @@ func (stack Stack) Validate() error {
 		}
 		if _, err := cnab.OverrideSources(installation.Override); err != nil {
 			return fmt.Errorf("%s: %w", installation.Name, err)
+		}
+		if installation.External != nil && (installation.Bundle != storage.BundleReference{} || len(installation.Parameters) > 0 || len(installation.Credentials) > 0 || installation.Override != "") {
+			return fmt.Errorf("%s is external: nemo deploys nothing for it, give it no bundle, parameters, credentials or override, only the outputs it gives", installation.Name)
 		}
 		return nil
 	})

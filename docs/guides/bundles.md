@@ -182,6 +182,8 @@ services:
 - `database-uri` is a parameter of the bundle: a variable of its compose, `DATABASE_URI`.
 - `dependency` is the dependency's key in `requires`, and `output` the output of it.
 
+A stack can also provide the dependency outside, such as a managed database, as an [external installation](stacks.md#external-installations) that gives the output itself.
+
 `nemo up` works the output out from the dependency's parameters, the stack's and its installation's, before it runs anything: the dependants get it whether the dependency acts or not, a sensitive output included, which nemo never records. A parameter the stack or the installation gives wins over its source. An installation acted on alone, with `nemo installation install` or `upgrade`, reads the output of its dependency's last run, as nemo recorded it: a sensitive one is not, give it the parameter.
 
 ## Compose and Swarm

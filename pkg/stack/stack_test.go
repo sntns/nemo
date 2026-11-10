@@ -108,6 +108,41 @@ installations:
 	require.ErrorContains(t, Stack{Name: "a/b", Target: target.Target{Orchestrator: target.Swarm}, Installations: installations}.Validate(), `name: must be a name without / or \.`)
 }
 
+// An external installation has no bundle, so needs no remote, and gives its outputs alone.
+func TestLoad_external(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "stack.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(`
+name: shop
+target: { orchestrator: swarm }
+installations:
+  - name: api
+    bundle: { file: api.json }
+  - name: database
+    external:
+      outputs:
+        uri: { env: DATABASE_URI }
+        ca: { path: certs/ca.pem }
+`), 0o600))
+	stack, err := Load(path)
+	require.NoError(t, err)
+	external := stack.Installations[1].External
+	require.NotNil(t, external)
+	assert.Equal(t, valuesource.Source{Key: "env", Value: "DATABASE_URI"}, external.Outputs["uri"])
+	assert.Equal(t, filepath.Join(directory, "certs/ca.pem"), external.Outputs["ca"].Value, "relative to the stack file")
+
+	for _, installation := range []string{
+		"{ name: database, bundle: { version: 1.0.0 }, external: {} }",
+		"{ name: database, parameters: { region: eu5 }, external: {} }",
+		"{ name: database, override: 'services: {}', external: {} }",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("name: shop\ntarget: { orchestrator: swarm }\ninstallations: ["+installation+"]\n"), 0o600))
+		_, err := Load(path)
+		require.ErrorContains(t, err, "database is external: nemo deploys nothing for it", installation)
+	}
+}
+
 func testBundle(t *testing.T, name, version string, dependencies map[string]cnab.Dependency) cnab.ExtendedBundle {
 	t.Helper()
 	extendedBundle := cnab.ExtendedBundle{Bundle: bundle.Bundle{Name: name, Version: version}}
@@ -159,18 +194,22 @@ func TestCheckDependencies(t *testing.T) {
 	t.Parallel()
 	ranged := map[string]cnab.Dependency{"db": {Bundle: "registry.example.com/bundles/database", Version: &cnab.DependencyVersion{Ranges: []string{"^2.0.0"}}}}
 
-	require.NoError(t, CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged), testBundle(t, "database", "2.1.0", nil)}))
+	require.NoError(t, CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged), testBundle(t, "database", "2.1.0", nil)}, nil))
 
-	err := CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged), testBundle(t, "database", "1.4.0", nil)})
+	err := CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged), testBundle(t, "database", "1.4.0", nil)}, nil)
 	require.EqualError(t, err, "web depends on registry.example.com/bundles/database: version 1.4.0 is in none of ^2.0.0")
 
 	either := map[string]cnab.Dependency{"db": {Bundle: "registry.example.com/bundles/database", Version: &cnab.DependencyVersion{Ranges: []string{"^1.0.0", "^2.0.0"}}}}
-	require.NoError(t, CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", either), testBundle(t, "database", "1.4.0", nil)}), "any of the ranges, as the specification reads them")
+	require.NoError(t, CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", either), testBundle(t, "database", "1.4.0", nil)}, nil), "any of the ranges, as the specification reads them")
 
-	err = CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)})
+	err = CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)}, nil)
 	require.EqualError(t, err, "web depends on registry.example.com/bundles/database, which the stack does not have")
-	assert.Len(t, Missing([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)}), 1)
+	assert.Len(t, Missing([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)}, nil), 1)
 
-	err = CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", map[string]cnab.Dependency{"db": {Bundle: "Not A Reference"}})})
+	err = CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", map[string]cnab.Dependency{"db": {Bundle: "Not A Reference"}})}, nil)
 	require.ErrorContains(t, err, "web: dependency")
+
+	external := map[string]bool{"database": true}
+	require.NoError(t, CheckDependencies([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)}, external), "an external installation, whatever its ranges")
+	assert.Empty(t, Missing([]cnab.ExtendedBundle{testBundle(t, "web", "1.0.0", ranged)}, external), "nothing to look for")
 }

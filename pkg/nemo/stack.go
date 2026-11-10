@@ -250,6 +250,10 @@ type upPlan struct {
 	// dependency, by bundle: worked out from the dependency's parameters, so
 	// known before it runs.
 	sourced map[string]map[string]string
+	// external are the installations provided outside the stack, by name,
+	// and externalOutputs the outputs of theirs read so far.
+	external        map[string]storage.External
+	externalOutputs map[string]map[string]string
 }
 
 // planUp loads the bundles of the stack and the dependencies it does not
@@ -263,7 +267,7 @@ func (nemo *Nemo) planUp(ctx context.Context, request UpRequest) (*upPlan, error
 	if err != nil {
 		return nil, err
 	}
-	if err := stack.CheckDependencies(loaded.bundles); err != nil {
+	if err := stack.CheckDependencies(loaded.bundles, loaded.externalNames()); err != nil {
 		return nil, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
 	}
 	ordered, err := stack.Order(loaded.bundles)
@@ -274,7 +278,7 @@ func (nemo *Nemo) planUp(ctx context.Context, request UpRequest) (*upPlan, error
 	if err != nil {
 		return nil, err
 	}
-	plan := &upPlan{stack: request.Stack, entries: loaded.entries, ordered: ordered, present: present}
+	plan := &upPlan{stack: request.Stack, entries: loaded.entries, ordered: ordered, present: present, external: loaded.external}
 	if err := plan.source(); err != nil {
 		return nil, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
 	}
@@ -285,10 +289,19 @@ func (nemo *Nemo) planUp(ctx context.Context, request UpRequest) (*upPlan, error
 }
 
 // stackBundles are the bundles of a stack, in the order it lists them, then
-// the dependencies it does not list.
+// the dependencies it does not list, and its external installations.
 type stackBundles struct {
-	entries map[string]stackEntry
-	bundles []cnab.ExtendedBundle
+	entries  map[string]stackEntry
+	bundles  []cnab.ExtendedBundle
+	external map[string]storage.External
+}
+
+func (loaded *stackBundles) externalNames() map[string]bool {
+	names := map[string]bool{}
+	for name := range loaded.external {
+		names[name] = true
+	}
+	return names
 }
 
 func (loaded *stackBundles) add(entry stackEntry) {
@@ -299,16 +312,26 @@ func (loaded *stackBundles) add(entry stackEntry) {
 // loadStack loads the bundle of each installation of the stack, then the
 // dependencies the stack does not list, until none is missing.
 func (nemo *Nemo) loadStack(ctx context.Context, stackOf stack.Stack) (stackBundles, error) {
-	loaded := stackBundles{entries: map[string]stackEntry{}}
+	loaded := stackBundles{entries: map[string]stackEntry{}, external: map[string]storage.External{}}
 	if err := nemo.loadInstallations(ctx, stackOf, &loaded); err != nil {
 		return loaded, err
 	}
 	return loaded, nemo.loadDependencies(ctx, stackOf, &loaded)
 }
 
-// loadInstallations loads the bundle of each installation the stack lists.
+// loadInstallations loads the bundle of each installation the stack lists,
+// but the external ones, which have none.
 func (nemo *Nemo) loadInstallations(ctx context.Context, stackOf stack.Stack, loaded *stackBundles) error {
 	for _, spec := range stackOf.Installations {
+		_, listed := loaded.entries[spec.Name]
+		_, external := loaded.external[spec.Name]
+		if listed || external {
+			return fmt.Errorf("stack %s: installation %s is given twice", stackOf.Name, spec.Name)
+		}
+		if spec.External != nil {
+			loaded.external[spec.Name] = *spec.External
+			continue
+		}
 		source, err := stackOf.Source(spec)
 		if err != nil {
 			return err
@@ -320,9 +343,6 @@ func (nemo *Nemo) loadInstallations(ctx context.Context, stackOf stack.Stack, lo
 		if spec.Name != bundle.Definition.Name {
 			return fmt.Errorf("stack %s: the bundle at %s is %s, not %s", stackOf.Name, source, bundle.Definition.Name, spec.Name)
 		}
-		if _, twice := loaded.entries[spec.Name]; twice {
-			return fmt.Errorf("stack %s: installation %s is given twice", stackOf.Name, spec.Name)
-		}
 		spec.Stack = stackOf.Name
 		loaded.add(stackEntry{spec: spec, source: source, loaded: bundle})
 	}
@@ -333,7 +353,8 @@ func (nemo *Nemo) loadInstallations(ctx context.Context, stackOf stack.Stack, lo
 // list, and theirs, until none is missing.
 func (nemo *Nemo) loadDependencies(ctx context.Context, stackOf stack.Stack, loaded *stackBundles) error {
 	resolver := cnab.Resolver{Tags: nemo.tags}
-	for missing := stack.Missing(loaded.bundles); len(missing) > 0; missing = stack.Missing(loaded.bundles) {
+	external := loaded.externalNames()
+	for missing := stack.Missing(loaded.bundles, external); len(missing) > 0; missing = stack.Missing(loaded.bundles, external) {
 		for _, requirement := range missing {
 			spec, source, bundle, err := nemo.dependency(ctx, stackOf, resolver, requirement)
 			if err != nil {
@@ -383,6 +404,9 @@ func (plan *upPlan) dependencyOutput(bundle cnab.ExtendedBundle, key, output str
 	if err != nil {
 		return "", fmt.Errorf("dependency %s: %w", key, err)
 	}
+	if external, ok := plan.external[name]; ok {
+		return plan.externalOutput(name, external, output)
+	}
 	entry, ok := plan.entries[name]
 	if !ok {
 		return "", fmt.Errorf("dependency %s: the stack has no installation %s", key, name)
@@ -391,11 +415,38 @@ func (plan *upPlan) dependencyOutput(bundle cnab.ExtendedBundle, key, output str
 	return dependency.OutputValue(output, dependency.OutputLookup(plan.parametersOf(dependency)))
 }
 
+// externalOutput reads the output the stack gives the external
+// installation, once.
+func (plan *upPlan) externalOutput(name string, external storage.External, output string) (string, error) {
+	if value, read := plan.externalOutputs[name][output]; read {
+		return value, nil
+	}
+	source, given := external.Outputs[output]
+	if !given {
+		return "", fmt.Errorf("the external installation %s gives no output %s", name, output)
+	}
+	value, err := credentials.Read(source)
+	if err != nil {
+		return "", fmt.Errorf("the output %s of the external installation %s: %w", output, name, err)
+	}
+	if plan.externalOutputs == nil {
+		plan.externalOutputs = map[string]map[string]string{}
+	}
+	if plan.externalOutputs[name] == nil {
+		plan.externalOutputs[name] = map[string]string{}
+	}
+	plan.externalOutputs[name][output] = value
+	return value, nil
+}
+
 // narrow keeps the installations only names, and their dependencies not
 // installed yet. Backwards, dependants come before their dependencies: those
 // join them on the way.
 func (plan *upPlan) narrow(only []string) error {
 	for _, name := range only {
+		if _, external := plan.external[name]; external {
+			return fmt.Errorf("installation %s of the stack %s is external: nemo deploys nothing for it", name, plan.stack.Name)
+		}
 		if _, listed := plan.entries[name]; !listed {
 			return fmt.Errorf("stack %s has no installation %s", plan.stack.Name, name)
 		}

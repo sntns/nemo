@@ -704,3 +704,45 @@ func TestInstallReadsTheRecordedOutputOfADependency(t *testing.T) {
 		})
 	}
 }
+
+// An external installation is provided outside the stack: nemo deploys nothing for it, and gives its
+// dependants the outputs the stack gives it. One that nemo installed before is uninstalled.
+func TestUpWithAnExternalInstallation(t *testing.T) {
+	t.Parallel()
+	nemo, fake, bundleFile, _ := setup(t)
+	ctx := context.Background()
+	database, web := writeOutputBundles(t, filepath.Dir(bundleFile), true)
+	actions := func(from int) []string {
+		var result []string
+		for _, request := range fake.requests[from:] {
+			result = append(result, request.Action+" "+request.Bundle.Name)
+		}
+		return result
+	}
+	demo := stack.Stack{
+		Name:   "demo",
+		Target: target.Target{Orchestrator: target.Compose},
+		Installations: []storage.InstallationSpec{
+			{Name: "web", Bundle: storage.BundleReference{File: web}},
+			{Name: "database", Bundle: storage.BundleReference{File: database}},
+		},
+	}
+	_, err := nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"install database", "install web"}, actions(0))
+
+	demo.Installations[1] = storage.InstallationSpec{Name: "database", External: &storage.External{Outputs: map[string]valuesource.Source{
+		"uri": {Key: "value", Value: "postgres://managed:5432/app"},
+	}}}
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"upgrade web", "uninstall database"}, actions(2), "nothing deployed for it, the one installed before uninstalled")
+	assert.Equal(t, "postgres://managed:5432/app", fake.requests[2].Parameters["database-uri"], "the output the stack gives it")
+
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo, Only: []string{"database"}})
+	require.ErrorContains(t, err, "installation database of the stack demo is external: nemo deploys nothing for it")
+
+	demo.Installations[1].External.Outputs = nil
+	_, err = nemo.Up(ctx, UpRequest{Stack: demo})
+	require.ErrorContains(t, err, "the external installation database gives no output uri")
+}

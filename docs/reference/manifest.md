@@ -121,12 +121,13 @@ The bundles to install. Their order does not matter: nemo orders them by their d
 | Field | |
 |---|---|
 | `name` | **Required.** The installation's name, which is its bundle's name. |
-| `bundle.version` | The bundle's version. Alone, the stack's `remote` locates the bundle. |
+| `bundle.version` | The bundle's version. Alone, the stack's `remote` locates the bundle. Required, unless the installation is external. |
 | `bundle.repository` | The bundle's repository in a registry, with `version`. |
 | `bundle.file` | A `bundle.json` file, instead of `repository` and `version`. |
 | `parameters` | Parameters for this installation, over the stack's. |
 | `credentials` | Credentials for this installation, over the stack's. Same shape as the stack's. |
 | `override` | A compose document, as YAML text, that gill fuses into the bundle's, last: what this stack changes of the bundle. See [overrides](../guides/stacks.md#overrides). |
+| `external.outputs` | The installation is provided outside the stack, such as a managed database: nemo deploys nothing for it, and gives the bundles that require it these outputs, by name, read as credentials are: `{ env: VAR }`, `{ path: FILE }`, `{ command: CMD }`, `{ value: TEXT }`. It has no `bundle`, `parameters`, `credentials` or `override`. See [external installations](../guides/stacks.md#external-installations). |
 
 ## JSON
 
