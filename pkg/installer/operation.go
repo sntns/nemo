@@ -57,6 +57,9 @@ type Container struct {
 	LookupEnv func(key string) (string, bool)
 	// FS is the container's filesystem, rooted at "/".
 	FS fs.FS
+	// WriteFile writes a file of the container, its directory made: the
+	// outputs of the bundle.
+	WriteFile func(path string, data []byte) error
 }
 
 // ReadOperation reads the operation the runtime handed to the container.
@@ -215,6 +218,41 @@ func (container Container) deliver(location *bundle.Location) (string, bool, err
 }
 
 // readFile reads an absolute path of the container.
+// writeOutputs writes each output of the bundle that applies to the action
+// where the output says, its value interpolated with the parameters, as the
+// compose is.
+func (operation Operation) writeOutputs() error {
+	if len(operation.Bundle.Outputs) == 0 {
+		return nil
+	}
+	if operation.container.WriteFile == nil {
+		return errors.New("writing the outputs: the container gives no way to write files")
+	}
+	variables, err := operation.parameterVariables()
+	if err != nil {
+		return err
+	}
+	lookup := func(variable string) (string, bool) {
+		value, ok := variables[variable]
+		return value, ok
+	}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(operation.Bundle.Outputs)) {
+		output := operation.Bundle.Outputs[name]
+		if !output.AppliesTo(operation.Action) {
+			continue
+		}
+		value, err := operation.Bundle.OutputValue(name, lookup)
+		if err == nil {
+			err = operation.container.WriteFile(output.Path, []byte(value))
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("writing output %s: %w", name, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 func (container Container) readFile(path string) ([]byte, error) {
 	// An operation built outside the invocation image, to see what it declares, has no files.
 	if container.FS == nil {

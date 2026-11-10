@@ -136,6 +136,54 @@ x-nemo-bundle:
 
 In a stack, nemo installs dependencies first and uninstalls them last. A dependency the stack lists is checked against the ranges; one it does not list is found at the stack's remote, else pulled from its repository at the highest version the ranges allow.
 
+## Outputs
+
+A bundle gives values to the bundles that require it with `outputs`, each made of its variables as the compose is:
+
+```yaml
+x-nemo-bundle:
+  name: database
+  version: 2.1.0
+  outputs:
+    uri:
+      description: The URI of the database.
+      value: ${DATABASE_URI:-postgres://shop:secret@database:5432/shop}
+      sensitive: true
+```
+
+- The key, `uri`, names the output: lowercase letters, digits and dashes.
+- `value` is interpolated with the bundle's parameters: a `${VARIABLE}` of an output is a parameter of the bundle, as one of the compose is. Here the database gives its own URI, unless it is given another one, `database-uri`, such as a managed database's.
+- `sensitive` keeps the value out of what nemo records and prints.
+
+Once it installs or upgrades the bundle, gill writes each output where CNAB says, `/cnab/app/outputs/<name>`: `nemo installation outputs` lists them, and any CNAB runtime can read them. The `kubernetes` installer driver can't read them back yet.
+
+A bundle reads a parameter from an output of a bundle it requires with `parameters`:
+
+```yaml
+x-nemo-bundle:
+  name: api
+  version: 1.4.0
+  dependencies:
+    requires:
+      database:
+        bundle: registry.example.com/shop/database
+  parameters:
+    database-uri:
+      source:
+        dependency: database
+        output: uri
+services:
+  api:
+    image: api:latest
+    environment:
+      DATABASE_URI: ${DATABASE_URI}
+```
+
+- `database-uri` is a parameter of the bundle: a variable of its compose, `DATABASE_URI`.
+- `dependency` is the dependency's key in `requires`, and `output` the output of it.
+
+`nemo up` works the output out from the dependency's parameters, the stack's and its installation's, before it runs anything: the dependants get it whether the dependency acts or not, a sensitive output included, which nemo never records. A parameter the stack or the installation gives wins over its source. An installation acted on alone, with `nemo installation install` or `upgrade`, reads the output of its dependency's last run, as nemo recorded it: a sensitive one is not, give it the parameter.
+
 ## Compose and Swarm
 
 One bundle runs on both orchestrators. The compose file says what runs; the target says how.

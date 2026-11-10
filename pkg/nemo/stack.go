@@ -246,6 +246,10 @@ type upPlan struct {
 	// limit is how many actions run at once: one when nemo can't tell what
 	// the installations share, else as many as can.
 	limit int
+	// sourced are the parameters each bundle reads from an output of a
+	// dependency, by bundle: worked out from the dependency's parameters, so
+	// known before it runs.
+	sourced map[string]map[string]string
 }
 
 // planUp loads the bundles of the stack and the dependencies it does not
@@ -271,6 +275,9 @@ func (nemo *Nemo) planUp(ctx context.Context, request UpRequest) (*upPlan, error
 		return nil, err
 	}
 	plan := &upPlan{stack: request.Stack, entries: loaded.entries, ordered: ordered, present: present}
+	if err := plan.source(); err != nil {
+		return nil, fmt.Errorf("stack %s: %w", request.Stack.Name, err)
+	}
 	if len(request.Only) > 0 {
 		return plan, plan.narrow(request.Only)
 	}
@@ -336,6 +343,52 @@ func (nemo *Nemo) loadDependencies(ctx context.Context, stackOf stack.Stack, loa
 		}
 	}
 	return nil
+}
+
+// source works out the parameters each bundle reads from an output of a
+// dependency: the output's value with the dependency's parameters, the
+// dependencies first, whether they act or not.
+func (plan *upPlan) source() error {
+	plan.sourced = map[string]map[string]string{}
+	for _, bundle := range plan.ordered {
+		if bundle.ParameterSources == nil {
+			continue
+		}
+		for _, name := range slices.Sorted(maps.Keys(*bundle.ParameterSources)) {
+			key, output, ok := (*bundle.ParameterSources)[name].DependencyOutput()
+			if !ok {
+				continue
+			}
+			value, err := plan.dependencyOutput(bundle, key, output)
+			if err != nil {
+				return fmt.Errorf("%s: parameter %s: %w", bundle.Name, name, err)
+			}
+			if plan.sourced[bundle.Name] == nil {
+				plan.sourced[bundle.Name] = map[string]string{}
+			}
+			plan.sourced[bundle.Name][name] = value
+		}
+	}
+	return nil
+}
+
+// dependencyOutput is the value of the output of the dependency of the
+// bundle, by its key in requires, with the dependency's parameters.
+func (plan *upPlan) dependencyOutput(bundle cnab.ExtendedBundle, key, output string) (string, error) {
+	var requirement cnab.Dependency
+	if bundle.Dependencies != nil {
+		requirement = bundle.Dependencies.Requires[key]
+	}
+	name, err := requirement.BundleName()
+	if err != nil {
+		return "", fmt.Errorf("dependency %s: %w", key, err)
+	}
+	entry, ok := plan.entries[name]
+	if !ok {
+		return "", fmt.Errorf("dependency %s: the stack has no installation %s", key, name)
+	}
+	dependency := entry.loaded.Definition
+	return dependency.OutputValue(output, dependency.OutputLookup(plan.parametersOf(dependency)))
 }
 
 // narrow keeps the installations only names, and their dependencies not
@@ -404,18 +457,30 @@ func (plan *upPlan) dropped() map[string]storage.Installation {
 	return dropped
 }
 
-// actionRequest is the request of the action on the bundle: the stack's
-// parameters the bundle declares, under the installation's own, and the
-// credentials of both.
-func (plan *upPlan) actionRequest(bundle cnab.ExtendedBundle, events progress.Sink, validate bool) ActionRequest {
-	entry := plan.entries[bundle.Name]
+// parametersOf are the parameters of the action on the bundle: the stack's
+// the bundle declares, under the installation's own, then those it reads
+// from an output of a dependency, unless given.
+func (plan *upPlan) parametersOf(bundle cnab.ExtendedBundle) map[string]string {
 	parameters := map[string]string{}
 	for name, value := range plan.stack.Parameters {
 		if _, declared := bundle.Parameters[name]; declared {
 			parameters[name] = value
 		}
 	}
-	maps.Copy(parameters, entry.spec.Parameters)
+	maps.Copy(parameters, plan.entries[bundle.Name].spec.Parameters)
+	for name, value := range plan.sourced[bundle.Name] {
+		if _, given := parameters[name]; !given {
+			parameters[name] = value
+		}
+	}
+	return parameters
+}
+
+// actionRequest is the request of the action on the bundle: its parameters,
+// and the credentials of the stack and of the installation.
+func (plan *upPlan) actionRequest(bundle cnab.ExtendedBundle, events progress.Sink, validate bool) ActionRequest {
+	entry := plan.entries[bundle.Name]
+	parameters := plan.parametersOf(bundle)
 	if entry.spec.Override != "" {
 		parameters[cnab.ParameterOverride] = entry.spec.Override
 	}

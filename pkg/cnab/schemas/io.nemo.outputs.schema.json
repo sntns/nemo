@@ -1,0 +1,19 @@
+{
+    "$id": "https://github.com/sntns/nemo/pkg/cnab/schemas/io.nemo.outputs.schema.json",
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "title": "nemo outputs extension",
+    "description": "The value of each output of the bundle, by name: a string interpolated with the bundle's parameters, as its compose is",
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "value": {
+                "type": "string",
+                "description": "The output's value, its ${VARIABLE}s the variables of the bundle's parameters"
+            }
+        },
+        "required": ["value"],
+        "additionalProperties": false
+    },
+    "minProperties": 1
+}

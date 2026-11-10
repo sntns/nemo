@@ -4,12 +4,14 @@ package bundle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -39,6 +41,32 @@ type Metadata struct {
 	// Dependencies are the bundles this one needs, as io.cnab.dependencies
 	// declares them: each a REGISTRY/NAME reference with version ranges.
 	Dependencies *cnab.Dependencies `json:"dependencies,omitempty"`
+	// Outputs are the values the bundle gives the bundles that require it,
+	// by name.
+	Outputs map[string]Output `json:"outputs,omitempty"`
+	// Parameters give parameters of the bundle a source, by name.
+	Parameters map[string]Parameter `json:"parameters,omitempty"`
+}
+
+// Output is an output of the bundle: a value made of its variables, as its
+// compose is, which the installer writes once it installs or upgrades it.
+type Output struct {
+	Description string `json:"description,omitempty"`
+	Value       string `json:"value"`
+	// Sensitive keeps the value out of what nemo records and prints.
+	Sensitive bool `json:"sensitive,omitempty"`
+}
+
+// Parameter is what x-nemo-bundle says of a parameter of the bundle.
+type Parameter struct {
+	Source ParameterSource `json:"source"`
+}
+
+// ParameterSource is where a parameter is read from: an output of a bundle
+// this one requires, by its key in dependencies.requires.
+type ParameterSource struct {
+	Dependency string `json:"dependency"`
+	Output     string `json:"output"`
 }
 
 // BuildRequest builds a bundle from compose files.
@@ -76,8 +104,9 @@ func (request BuildRequest) Sources() ([]transfer.Image, error) {
 
 // Build returns the bundle of the compose files: their metadata, a
 // parameter per variable, a credential per secret read from a variable,
-// the images with their digest, the nemo-* parameters, and the compose
-// project itself in io.nemo.compose.
+// the images with their digest, the nemo-* parameters, the compose
+// project itself in io.nemo.compose, and the outputs and the sources of
+// parameters x-nemo-bundle gives.
 func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, error) {
 	documents, metadata, err := readCompose(request.ComposeFiles)
 	if err != nil {
@@ -127,9 +156,12 @@ func Build(ctx context.Context, request BuildRequest) (cnab.ExtendedBundle, erro
 	if err != nil {
 		return cnab.ExtendedBundle{}, fmt.Errorf("loading the compose project: %w", err)
 	}
-	variablesErr := declareVariables(&built, documents, project)
+	variablesErr := declareVariables(&built, documents, project, metadata.Outputs)
 	images, imagesErr := resolveImages(ctx, project, request.Images)
 	if err := errors.Join(variablesErr, imagesErr); err != nil {
+		return cnab.ExtendedBundle{}, err
+	}
+	if err := errors.Join(declareOutputs(&built, metadata.Outputs), declareSources(&built, metadata.Parameters, metadata.Dependencies)); err != nil {
 		return cnab.ExtendedBundle{}, err
 	}
 	built.Images = images
@@ -222,10 +254,11 @@ func readCompose(files []string) ([]cnab.ComposeDocument, Metadata, error) {
 }
 
 // declareVariables declares a string parameter for each ${VARIABLE} of the
-// documents, and for each config read from a variable; and a credential
-// for each secret read from a variable. The installer interpolates the
-// documents with the parameters, and reads configs and secrets from both.
-func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project) error {
+// documents and of the outputs' values, and for each config read from a
+// variable; and a credential for each secret read from a variable. The
+// installer interpolates the documents and the outputs with the parameters,
+// and reads configs and secrets from both.
+func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, project *types.Project, outputs map[string]Output) error {
 	declare := func(variable string, value template.Variable) error {
 		name := parameterName(variable)
 		if strings.HasPrefix(name, "nemo-") {
@@ -243,8 +276,12 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		return nil
 	}
 
-	for _, document := range documents {
-		variables := template.ExtractVariables(document.Config, template.DefaultPattern)
+	values := map[string]any{}
+	for name, output := range outputs {
+		values[name] = output.Value
+	}
+	for _, config := range append(configsOf(documents), values) {
+		variables := template.ExtractVariables(config, template.DefaultPattern)
 		for _, variable := range slices.Sorted(maps.Keys(variables)) {
 			if err := declare(variable, variables[variable]); err != nil {
 				return err
@@ -276,6 +313,109 @@ func declareVariables(built *bundle.Bundle, documents []cnab.ComposeDocument, pr
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func configsOf(documents []cnab.ComposeDocument) []map[string]any {
+	configs := make([]map[string]any, len(documents))
+	for i, document := range documents {
+		configs[i] = document.Config
+	}
+	return configs
+}
+
+// outputName is the name an output may have: the file it is written to.
+var outputName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// declareOutputs declares the outputs, each written at
+// /cnab/app/outputs/NAME once the bundle is installed or upgraded, with a
+// write-only definition when sensitive, and carries their values in
+// io.nemo.outputs.
+func declareOutputs(built *bundle.Bundle, outputs map[string]Output) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+	built.Outputs = map[string]bundle.Output{}
+	values := cnab.OutputValues{}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		output := outputs[name]
+		switch {
+		case !outputName.MatchString(name):
+			errs = append(errs, fmt.Errorf("outputs.%s: an output is named with lowercase letters, digits and dashes", name))
+			continue
+		case output.Value == "":
+			errs = append(errs, fmt.Errorf("outputs.%s: give it a value", name))
+			continue
+		}
+		schema := &definition.Schema{Type: "string"}
+		if output.Sensitive {
+			schema.WriteOnly = &output.Sensitive
+		}
+		built.Definitions[outputDefinition(name)] = schema
+		built.Outputs[name] = bundle.Output{
+			Definition:  outputDefinition(name),
+			Description: output.Description,
+			ApplyTo:     []string{cnab.ActionInstall, cnab.ActionUpgrade},
+			Path:        path.Join(cnab.OutputsDirectory, name),
+		}
+		values[name] = cnab.OutputValue{Value: output.Value}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	return cnab.OutputsExtension.Write(built, values)
+}
+
+// outputDefinition is the definition of an output: a nemo-* name, which no
+// parameter of the bundle has.
+func outputDefinition(output string) string {
+	return "nemo-output-" + output
+}
+
+// declareSources gives each parameter its source, an output of a bundle
+// the bundle requires, in io.cnab.parameter-sources, which the bundle then
+// requires.
+func declareSources(built *bundle.Bundle, parameters map[string]Parameter, dependencies *cnab.Dependencies) error {
+	if len(parameters) == 0 {
+		return nil
+	}
+	sources := cnab.ParameterSources{}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(parameters)) {
+		source := parameters[name].Source
+		_, declared := built.Parameters[name]
+		_, required := dependencyOf(dependencies, source.Dependency)
+		switch {
+		case strings.HasPrefix(name, "nemo-"):
+			errs = append(errs, fmt.Errorf("parameters.%s: the nemo-* parameters are nemo's", name))
+		case !declared:
+			errs = append(errs, fmt.Errorf("parameters.%s: no variable of the compose is this parameter", name))
+		case source.Dependency == "" || source.Output == "":
+			errs = append(errs, fmt.Errorf("parameters.%s.source: give the dependency and its output", name))
+		case !required:
+			errs = append(errs, fmt.Errorf("parameters.%s.source.dependency: %s is not in dependencies.requires", name, source.Dependency))
+		default:
+			raw, err := json.Marshal(map[string]string{"dependency": source.Dependency, "name": source.Output})
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			sources[name] = cnab.ParameterSource{Priority: []string{cnab.SourceDependencyOutput}, Sources: map[string]json.RawMessage{cnab.SourceDependencyOutput: raw}}
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	built.RequiredExtensions = append(built.RequiredExtensions, cnab.ParameterSourcesExtension.Key)
+	return cnab.ParameterSourcesExtension.Write(built, sources)
+}
+
+func dependencyOf(dependencies *cnab.Dependencies, key string) (cnab.Dependency, bool) {
+	if dependencies == nil {
+		return cnab.Dependency{}, false
+	}
+	dependency, ok := dependencies.Requires[key]
+	return dependency, ok
 }
 
 // parameterName is the parameter of a variable: GATEWAY_HOST is gateway-host.

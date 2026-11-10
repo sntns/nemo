@@ -49,7 +49,10 @@ func Run(ctx context.Context, operation Operation, orchestrators Orchestrators, 
 		opts := InstallOptions{
 			Events: events,
 		}
-		return orchestrator.Install(ctx, project, opts)
+		if err = orchestrator.Install(ctx, project, opts); err != nil {
+			return err
+		}
+		return operation.writeOutputs()
 	case cnab.ActionValidate:
 		return orchestrator.Validate(project)
 	case cnab.ActionUninstall:
