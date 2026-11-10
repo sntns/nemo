@@ -63,6 +63,19 @@ type InstallationSpec struct {
 	// the installation changes of it, in its stack. It goes to the installer as
 	// the nemo-override parameter, with which it is recorded.
 	Override string `json:"override,omitempty"`
+	// External makes the installation one provided outside the stack, such
+	// as a managed database: nemo deploys nothing for it, and the stack
+	// gives its outputs. It has no bundle, parameters, credentials or
+	// override.
+	External *External `json:"external,omitempty"`
+}
+
+// External is an installation provided outside the stack: it satisfies the
+// bundles that require it, and gives them its outputs.
+type External struct {
+	// Outputs are the sources of its outputs, by name, read as credentials
+	// are: env, path, command or value.
+	Outputs map[string]valuesource.Source `json:"outputs,omitempty"`
 }
 
 // BundleReference is where an installation's bundle is, as Porter's
@@ -77,11 +90,11 @@ type BundleReference struct {
 }
 
 // Validate checks the spec: a file has its own version, a repository or a
-// remote needs one.
+// remote needs one, and an external installation has no bundle.
 func (spec InstallationSpec) Validate() error {
 	return validation.ValidateStruct(&spec,
 		validation.Field(&spec.Name, validation.Required),
-		validation.Field(&spec.Bundle),
+		validation.Field(&spec.Bundle, validation.Skip.When(spec.External != nil)),
 	)
 }
 

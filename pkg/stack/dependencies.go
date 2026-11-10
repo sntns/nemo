@@ -67,9 +67,9 @@ type Requirement struct {
 }
 
 // Missing returns the dependencies no bundle of the set satisfies by name,
-// each once, with the first bundle that requires it: the stack does not
-// list them.
-func Missing(bundles []cnab.ExtendedBundle) []Requirement {
+// nor an external installation, each once, with the first bundle that
+// requires it: the stack does not list them.
+func Missing(bundles []cnab.ExtendedBundle, external map[string]bool) []Requirement {
 	var missing []Requirement
 	for _, bundle := range bundles {
 		if bundle.Dependencies == nil {
@@ -77,7 +77,7 @@ func Missing(bundles []cnab.ExtendedBundle) []Requirement {
 		}
 		for _, dependency := range bundle.Dependencies.ListBySequence() {
 			name, err := dependency.BundleName()
-			if err != nil || slices.ContainsFunc(bundles, func(other cnab.ExtendedBundle) bool { return other.Name == name }) {
+			if err != nil || external[name] || slices.ContainsFunc(bundles, func(other cnab.ExtendedBundle) bool { return other.Name == name }) {
 				continue
 			}
 			if !slices.ContainsFunc(missing, func(other Requirement) bool { return other.Dependency.Bundle == dependency.Bundle }) {
@@ -90,8 +90,10 @@ func Missing(bundles []cnab.ExtendedBundle) []Requirement {
 
 // CheckDependencies reports each dependency the set does not satisfy: one
 // whose reference is not REGISTRY/NAME, a bundle the set does not have, or
-// one whose version is outside the dependency's ranges.
-func CheckDependencies(bundles []cnab.ExtendedBundle) error {
+// one whose version is outside the dependency's ranges. An external
+// installation satisfies a dependency on its name, whatever its ranges: it
+// has no bundle, nor version.
+func CheckDependencies(bundles []cnab.ExtendedBundle, external map[string]bool) error {
 	var errs []error
 	for _, bundle := range bundles {
 		if bundle.Dependencies == nil {
@@ -101,6 +103,9 @@ func CheckDependencies(bundles []cnab.ExtendedBundle) error {
 			name, err := dependency.BundleName()
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", bundle.Name, err))
+				continue
+			}
+			if external[name] {
 				continue
 			}
 			index := slices.IndexFunc(bundles, func(other cnab.ExtendedBundle) bool { return other.Name == name })

@@ -81,6 +81,15 @@ func Parse(name, text string) (valuesource.Strategy, error) {
 	return valuesource.Strategy{Name: name, Source: valuesource.Source{Key: key, Value: value}}, nil
 }
 
+// Read reads the source, as a credential's is read: a variable, a file, the
+// output of a command, or a value.
+func Read(source valuesource.Source) (string, error) {
+	if !slices.Contains([]string{host.SourceEnv, host.SourcePath, host.SourceCommand, host.SourceValue}, source.Key) {
+		return "", fmt.Errorf("source %s is not env, path, command or value", source.Key)
+	}
+	return (&host.SecretStore{}).Resolve(source.Key, source.Value)
+}
+
 // Absolute returns the strategy with its path made absolute from
 // directory, so that it reads the same file from anywhere. A path from a
 // variable, $HOME/certs, is left to be expanded where it is read.
