@@ -15,7 +15,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/platforms v1.0.0-rc.5
 	github.com/distribution/reference v0.6.1-0.20240718132515-8c942b0459df
-	github.com/docker/cli v29.9.2+incompatible
+	github.com/docker/cli v29.9.3+incompatible
 	github.com/docker/go-connections v0.8.2
 	github.com/go-ozzo/ozzo-validation/v4 v4.5.0
 	github.com/google/go-containerregistry v0.22.1
@@ -29,7 +29,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
 	go.yaml.in/yaml/v3 v3.0.6
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	golang.org/x/term v0.47.0
 	k8s.io/api v0.37.2
 	k8s.io/apimachinery v0.37.2
