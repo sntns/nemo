@@ -40,7 +40,11 @@ type Installation struct {
 	// RelocationMap says where the bundle's images are, when it was pulled
 	// from a registry: the next actions run them from there.
 	RelocationMap relocation.ImageRelocationMap `json:"relocationMap,omitempty"`
-	Status        InstallationStatus            `json:"status"`
+	// Object is the object the installation is made for, when nemo made it
+	// for an object several installations of the stack share, not for a
+	// bundle: see IsObject.
+	Object *Object            `json:"object,omitempty"`
+	Status InstallationStatus `json:"status"`
 }
 
 // InstallationSpec is the desired state of an installation, as Porter's:
@@ -123,6 +127,10 @@ type InstallationStatus struct {
 	BundleReference string `json:"bundleReference,omitempty"`
 	BundleVersion   string `json:"bundleVersion"`
 	BundleDigest    string `json:"bundleDigest,omitempty"`
+	// Objects are the networks, volumes, configs and secrets its project
+	// declares on the target, as of its last install or upgrade, those it
+	// only refers to aside: its own, and those it shares.
+	Objects []Object `json:"objects,omitempty"`
 }
 
 // RunCustom is what nemo records in a claim's custom data: where the

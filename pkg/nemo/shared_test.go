@@ -143,6 +143,25 @@ func TestUpSharesAnObjectBetweenItsUsers(t *testing.T) {
 	assert.Empty(t, fake.requests[network].Bundle.Images, "no service, no image")
 	assert.Equal(t, fake.requests[0].Bundle.InvocationImages, fake.requests[network].Bundle.InvocationImages, "the installer of the bundles")
 
+	recorded, err := nemo.store.ListInstallations(context.Background(), "demo")
+	require.NoError(t, err)
+	mesh := storage.Object{Kind: storage.KindNetwork, Name: "demo_mesh"}
+	for _, installation := range recorded {
+		switch installation.Name {
+		case "network.demo_mesh":
+			assert.Equal(t, &mesh, installation.Object, "the network's installation is the network's")
+		case "alpha", "bravo":
+			assert.Equal(t, []storage.Object{mesh}, installation.Status.Objects, "%s records the network it shares", installation.Name)
+			assert.False(t, installation.IsObject())
+		}
+	}
+	assert.Equal(t, []storage.ObjectUse{
+		{Object: mesh, Users: []string{"alpha", "bravo"}},
+		{Object: storage.Object{Kind: storage.KindNetwork, Name: "demo_own-c"}, Users: []string{"charlie"}},
+		{Object: storage.Object{Kind: storage.KindNetwork, Name: "demo_own-d"}, Users: []string{"delta"}},
+		{Object: storage.Object{Kind: storage.KindNetwork, Name: "demo_own-e"}, Users: []string{"echo"}},
+	}, storage.Objects(recorded), "an object one installation uses is listed as one two share, with its users")
+
 	before := len(fake.requests)
 	_, err = nemo.Up(context.Background(), UpRequest{Stack: demo})
 	require.NoError(t, err)

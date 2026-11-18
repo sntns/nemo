@@ -590,6 +590,8 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 	}
 	status.RunID, status.Action, status.ResultID, status.ResultStatus, status.Modified = claim.ID, claim.Action, result.ID, result.Status, result.Created
 	status.BundleReference, status.BundleVersion, status.BundleDigest = plan.source, bundle.Version, plan.digest
+	// What the project declares, rendered as its installer did: nil for a bundle nemo can't read.
+	declared, _ := inventoryOf(ctx, runtime.Request{Bundle: bundle, Stack: plan.stack, Action: claim.Action, Target: nemo.reach(plan.stack, plan.target), Parameters: plan.parameters}, plan.values)
 	if result.Status == cnab.StatusSucceeded {
 		switch claim.Action {
 		case cnab.ActionInstall, cnab.ActionUpgrade:
@@ -597,9 +599,15 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 				status.Installed = &result.Created
 			}
 			status.Uninstalled = nil
+			status.Objects = objectsOf(declared, status.Objects)
 		case cnab.ActionUninstall:
 			status.Uninstalled = &result.Created
+			status.Objects = nil
 		}
+	}
+	object := stored.Object
+	if key, shared := sharedOf(bundle, declared); shared && object == nil {
+		object = &storage.Object{Kind: kindOf(key.group), Name: key.name}
 	}
 
 	parameters := map[string]string{}
@@ -620,6 +628,7 @@ func (nemo *Nemo) save(ctx context.Context, plan actionPlan, run runtime.Run) er
 		Target:        recordedTarget(plan.target),
 		Installer:     plan.installer,
 		RelocationMap: plan.relocation,
+		Object:        object,
 		Status:        status,
 	})
 }

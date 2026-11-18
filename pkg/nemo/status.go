@@ -24,11 +24,13 @@ import (
 )
 
 // StackStatus is where a stack stands: each installation as nemo keeps
-// it, and its services as the target runs them.
+// it, and its services as the target runs them; the objects they declare,
+// each with those that use it.
 type StackStatus struct {
 	Name          string              `json:"name"`
 	Target        target.Target       `json:"target"`
 	Installations []InstallationState `json:"installations"`
+	Objects       []storage.ObjectUse `json:"objects,omitempty"`
 }
 
 // InstallationState is where an installation stands: its last action, and
@@ -69,8 +71,11 @@ func (nemo *Nemo) Status(ctx context.Context, stack string) (StackStatus, error)
 		return StackStatus{}, err
 	}
 
-	status := StackStatus{Name: stack, Target: deployment}
+	status := StackStatus{Name: stack, Target: deployment, Objects: storage.Objects(installations)}
 	for _, installation := range installations {
+		if installation.IsObject() {
+			continue
+		}
 		state := InstallationState{
 			Name:      installation.Name,
 			Version:   installation.Status.BundleVersion,

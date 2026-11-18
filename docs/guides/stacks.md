@@ -258,7 +258,7 @@ nemo down --stack shop
 
 | Command | Shows |
 |---|---|
-| `nemo status` | Each installation, its version, its last action, and how many of its services run. Installations not ready are unfolded; `-a` unfolds all. |
+| `nemo status` | Each installation, its version, its last action, and how many of its services run. Installations not ready are unfolded; `-a` unfolds all. Then each network, volume, config and secret they declare, with those that use it. |
 | `nemo logs [INSTALLATION [SERVICE]]` | The logs of the stack's services, one installation's, or one service's. `-f` follows them, `-n` limits the lines. |
 | `nemo installation list` | The installations of the stack, their version, their last action. |
 | `nemo installation show NAME` | An installation's bundle, target, parameters and credential sources. |

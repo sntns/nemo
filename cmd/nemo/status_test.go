@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/sntns/nemo/pkg/nemo"
+	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/target"
 )
 
@@ -26,6 +27,10 @@ func TestStatusText(t *testing.T) {
 				Services: []nemo.ServiceState{{Name: "nginx", Running: 0, Desired: 1, State: "exited"}}},
 			{Name: "old", Version: "0.1.0", Action: "uninstall", Result: "succeeded", Modified: now.Add(-72 * time.Hour)},
 		},
+		Objects: []storage.ObjectUse{
+			{Object: storage.Object{Kind: storage.KindVolume, Name: "demo_data"}, Users: []string{"runtime"}},
+			{Object: storage.Object{Kind: storage.KindNetwork, Name: "demo_mesh"}, Users: []string{"iam", "runtime", "web"}},
+		},
 	}
 	assert.Equal(t, `demo · swarm · remote
 
@@ -36,5 +41,8 @@ func TestStatusText(t *testing.T) {
 ✖ web      0.1.0   upgrade failed just now  0/1 services
   ✖ nginx          exited                   0/1
 · old      0.1.0   uninstalled 3d ago
-`, ansi.Strip(statusText(current, false, now)), "the installations ready folded, the others unfolded")
+
+▪ volume demo_data   used by runtime
+▪ network demo_mesh  used by 3 installations
+`, ansi.Strip(statusText(current, false, now)), "the installations ready folded, the others unfolded, then each object with its users, one or several alike")
 }
