@@ -15,6 +15,7 @@ import (
 
 	"github.com/sntns/nemo/pkg/cnab"
 	"github.com/sntns/nemo/pkg/nemo"
+	"github.com/sntns/nemo/pkg/storage"
 )
 
 // stackName is the stack given, else the current one.
@@ -178,7 +179,20 @@ func statusText(current nemo.StackStatus, all bool, now time.Time) string {
 			}
 		}
 	}
+	writeRows(&text, rows)
+	if len(current.Objects) > 0 {
+		var objects []row
+		for _, object := range current.Objects {
+			objects = append(objects, objectRow(object))
+		}
+		text.WriteString("\n")
+		writeRows(&text, objects)
+	}
+	return text.String()
+}
 
+// writeRows writes the rows, their columns lined up.
+func writeRows(text *strings.Builder, rows []row) {
 	var widths [4]int
 	for _, line := range rows {
 		for i, cell := range line.cells {
@@ -208,7 +222,6 @@ func statusText(current nemo.StackStatus, all bool, now time.Time) string {
 		}
 		text.WriteString("\n")
 	}
-	return text.String()
 }
 
 var plain = lipgloss.NewStyle()
@@ -220,6 +233,20 @@ type row struct {
 	icon   string
 	cells  [4]string
 	styles [4]lipgloss.Style
+}
+
+// objectRow is the line of an object the installations declare, after
+// theirs: its kind and name, and those that use it, one or several alike.
+func objectRow(object storage.ObjectUse) row {
+	users := ""
+	switch len(object.Users) {
+	case 0:
+	case 1:
+		users = "used by " + object.Users[0]
+	default:
+		users = fmt.Sprintf("used by %d installations", len(object.Users))
+	}
+	return row{icon: faint.Render("▪"), cells: [4]string{object.Kind + " " + object.Name, users}, styles: [4]lipgloss.Style{plain, faint}}
 }
 
 // serviceRow is the line of a service: green once ready, red when its

@@ -93,12 +93,12 @@ nemo keeps stacks by name in its home, and one of them is the current stack, whi
 
 ## Installation
 
-An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created. Two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, share that one object. It is none of theirs: nemo gives it an installation of its own, `network.shop_mesh` for instance, whose bundle declares it alone, with no service. It is created before the installations that use it, and removed once they are gone.
+An installation is a bundle installed in a stack, named after the bundle: `shop/api` is the `api` installation of the `shop` stack. Everything gill creates for it is named after the stack and labeled with both names, so nemo can find it again, show its status and logs, and remove exactly what it created. Two installations that declare a network or a volume of the same name, or a Swarm config or secret of the same name and content, share that one object. It is none of theirs: nemo creates it before the installations that use it, and removes it once they are gone, with an installation of its own, `network.shop_mesh` for instance, whose bundle declares it alone, with no service. That installation is nemo's way of doing it, not one of the stack's: `nemo status` lists every network, volume, config and secret the installations declare after them, each with those that use it, whether one does or several share it.
 
 nemo keeps a record of each installation, as the CNAB specification describes it:
 
 - its **spec**: the bundle, the parameters given, the sources of its credentials (never their values);
-- its **status**: the last action and its result, the version installed;
+- its **status**: the last action and its result, the version installed, the objects its project declares on the target;
 - its **runs**: each install, upgrade and uninstall, with the bundle it ran, its parameters, its result, and its outputs.
 
 `nemo installation list`, `show`, `runs` and `outputs` read these records. The `install`, `upgrade` and `uninstall` commands of `nemo installation` act on one bundle without a manifest: they are the steps `nemo up` and `nemo down` are made of.

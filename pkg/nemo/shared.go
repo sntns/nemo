@@ -22,6 +22,7 @@ import (
 	swarmconvert "github.com/sntns/nemo/pkg/installer/swarm/convert"
 	"github.com/sntns/nemo/pkg/progress"
 	"github.com/sntns/nemo/pkg/runtime"
+	"github.com/sntns/nemo/pkg/storage"
 	"github.com/sntns/nemo/pkg/target"
 )
 
@@ -271,6 +272,27 @@ func sharedVolumes(declared *inventory, others map[string]*inventory) map[string
 		}
 	}
 	return found
+}
+
+// kindOf is the kind of the objects of the group: network for networks…
+func kindOf(group string) string {
+	return strings.TrimSuffix(group, "s")
+}
+
+// objectsOf are the objects the project declares, by kind then name, those
+// it only refers to aside; the previous ones when nemo can't read it.
+func objectsOf(declared *inventory, previous []storage.Object) []storage.Object {
+	if declared == nil {
+		return previous
+	}
+	var objects []storage.Object
+	for key, declaration := range declared.objects {
+		if !declaration.external {
+			objects = append(objects, storage.Object{Kind: kindOf(key.group), Name: key.name})
+		}
+	}
+	slices.SortFunc(objects, storage.Object.Compare)
+	return objects
 }
 
 // usersText says how many installations share the object.
