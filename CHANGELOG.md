@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.15.0](https://github.com/sntns/nemo/compare/v0.14.0...v0.15.0) (2026-11-18)
+
+
+### Features
+
+* the objects of a stack, one installation's or shared, listed alike ([f45c965](https://github.com/sntns/nemo/commit/f45c965abaddd0ca47aa35a4b44abbfb2b5312b4))
+* the objects of a stack, one installation's or shared, listed alike ([5a13ad5](https://github.com/sntns/nemo/commit/5a13ad517ba56f957244a9cf0abea6d1b74d88e4))
+
 ## [0.14.0](https://github.com/sntns/nemo/compare/v0.13.0...v0.14.0) (2026-11-10)
 
 
