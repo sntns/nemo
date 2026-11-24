@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.0](https://github.com/sntns/nemo/compare/v0.15.0...v0.16.0) (2026-11-24)
+
+
+### Features
+
+* Plan tells the objects a stack will have once nemo up ran, before anything runs ([34cff33](https://github.com/sntns/nemo/commit/34cff33a80d4a3218be044bcf4676e709299a6aa))
+
+
+### Bug Fixes
+
+* build with OpenTelemetry 1.47.0, which fixes GO-2026-6974 ([cf71652](https://github.com/sntns/nemo/commit/cf71652002fab8a8e2a30ddc61250ac649a6bdd3))
+* reading the records of a stack its target never had makes nothing there ([79c9244](https://github.com/sntns/nemo/commit/79c924492bd2e67a838a4613e80212c06f909899))
+
 ## [0.15.0](https://github.com/sntns/nemo/compare/v0.14.0...v0.15.0) (2026-11-18)
 
 
