@@ -49,6 +49,15 @@ type StackResult struct {
 	Runs []Run `json:"runs"`
 }
 
+// StackPlan is what an up would leave of a stack.
+type StackPlan struct {
+	// Objects are the networks, volumes, configs and secrets its
+	// installations will declare on the target, by kind then name, each with
+	// those that use it: as storage.Objects lists them from the records the
+	// up writes once its actions succeeded.
+	Objects []storage.ObjectUse `json:"objects"`
+}
+
 // Up brings the stack to its manifest. It plans before it touches anything:
 // it reads every installation's credentials, renders its compose project to
 // know what it declares on the target, and refuses what two installations
@@ -126,6 +135,52 @@ func (nemo *Nemo) Up(ctx context.Context, request UpRequest) (_ StackResult, err
 	runs, err := nemo.uninstall(ctx, plan.stack.Name, plan.dropped(), request.Purge, events, plan.inventories)
 	result.Runs = append(result.Runs, runs...)
 	return result, err
+}
+
+// Plan works out what Up would leave of the stack, as Up plans before it
+// acts: it loads the bundles, reads the credentials and renders what each
+// installation declares, and refuses what Up would refuse. It runs no
+// action, writes no record, and leaves the stack to whoever holds it.
+func (nemo *Nemo) Plan(ctx context.Context, request UpRequest) (_ StackPlan, err error) {
+	done, err := nemo.open(ctx, &request.Stack, request.Stack.Name, false)
+	if err != nil {
+		return StackPlan{}, err
+	}
+	defer release(done, &err)
+	plan, err := nemo.planUp(ctx, request)
+	if err != nil {
+		return StackPlan{}, err
+	}
+	if _, err := nemo.prepare(ctx, plan); err != nil {
+		return StackPlan{}, err
+	}
+	return StackPlan{Objects: storage.Objects(plan.recorded(len(request.Only) == 0))}, nil
+}
+
+// recorded are the installations of the stack as the records have them
+// once the up's actions succeeded: each it acts on with the objects it
+// declares, as save records them, each object installations share with an
+// installation of its own, and, when the up takes the whole stack, none of
+// those it uninstalls.
+func (plan *upPlan) recorded(whole bool) []storage.Installation {
+	after := maps.Clone(plan.present)
+	if whole {
+		for name := range plan.dropped() {
+			delete(after, name)
+		}
+	}
+	for _, bundle := range plan.ordered {
+		installation := after[bundle.Name]
+		installation.Name = bundle.Name
+		installation.Status.Objects = objectsOf(plan.inventories[bundle.Name], installation.Status.Objects)
+		after[bundle.Name] = installation
+	}
+	for _, shared := range plan.shared {
+		installation := after[shared.node()]
+		installation.Name, installation.Object = shared.node(), &storage.Object{Kind: kindOf(shared.group), Name: shared.name}
+		after[shared.node()] = installation
+	}
+	return slices.Collect(maps.Values(after))
 }
 
 // prepare plans the action of each installation, reads its credentials and

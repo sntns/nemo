@@ -90,10 +90,11 @@ type Store struct {
 var _ storage.Store = (*Store)(nil)
 
 // Open copies the records of the stack from its volume, which it creates the
-// first time, of the volumes' records type when they have one. Held, it is
-// the stack's only writer until Close: another Open held fails with ErrBusy;
-// and it moves to a volume of that type the records of a volume that is
-// not of it.
+// first time, of the volumes' records type when they have one; without that
+// type, Open not held finds no records where the target has no volume, and
+// makes nothing there. Held, it is the stack's only writer until Close:
+// another Open held fails with ErrBusy; and it moves to a volume of that type
+// the records of a volume that is not of it.
 func Open(ctx context.Context, api client.APIClient, stack string, volumes map[string]target.VolumeType, held bool) (_ *Store, err error) {
 	if !dockerName.MatchString(stack) {
 		return nil, fmt.Errorf("stack %s: its records are kept on the target in a volume named after it, which Docker refuses: letters, digits, _ . and - only", stack)
@@ -108,6 +109,19 @@ func Open(ctx context.Context, api client.APIClient, stack string, volumes map[s
 			err = errors.Join(err, store.Close(ctx))
 		}
 	}()
+	// Without a records type, a stack the target has no volume of has no
+	// records: reading them makes nothing there. With one, the volume reaches
+	// the records on the type's storage, which another Docker may have
+	// written.
+	if _, typed := volumes[Type]; !held && !typed {
+		existing, err := store.docker.VolumeFind(ctx, spec.Name)
+		if err != nil {
+			return nil, err
+		}
+		if existing == nil {
+			return store, store.makeMirror()
+		}
+	}
 	if err := store.ensureImage(ctx); err != nil {
 		return nil, err
 	}
@@ -321,16 +335,21 @@ func isEmpty(directory string) (bool, error) {
 	return len(entries) == 0, err
 }
 
-// copyOut copies the volume into a local directory, the stack's directory
-// of a file store.
-func (store *Store) copyOut(ctx context.Context) error {
+// makeMirror makes the local directory of the records, empty: a stack
+// without records yet has its directory all the same, for its owner.
+func (store *Store) makeMirror() error {
 	mirror, err := os.MkdirTemp("", "nemo-records-")
 	if err != nil {
 		return err
 	}
 	store.mirror, store.local = mirror, file.New(mirror)
-	// A stack without records yet has its directory all the same, for its owner.
-	if err := os.Mkdir(filepath.Join(mirror, store.stack), 0o700); err != nil {
+	return os.Mkdir(filepath.Join(mirror, store.stack), 0o700)
+}
+
+// copyOut copies the volume into a local directory, the stack's directory
+// of a file store.
+func (store *Store) copyOut(ctx context.Context) error {
+	if err := store.makeMirror(); err != nil {
 		return err
 	}
 	content, err := store.docker.ContainerCopyFrom(ctx, store.container, mountPoint)
@@ -338,10 +357,10 @@ func (store *Store) copyOut(ctx context.Context) error {
 		return err
 	}
 	defer content.Close()
-	if err := extract(content, filepath.Join(mirror, store.stack)); err != nil {
+	if err := extract(content, filepath.Join(store.mirror, store.stack)); err != nil {
 		return fmt.Errorf("reading the records of %s: %w", store.stack, err)
 	}
-	owner, err := os.ReadFile(filepath.Join(mirror, store.stack, ownerFile))
+	owner, err := os.ReadFile(filepath.Join(store.mirror, store.stack, ownerFile))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}

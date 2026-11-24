@@ -58,6 +58,26 @@ func TestRecords_ownerOfANewStack(t *testing.T) {
 	assert.Empty(t, installations)
 }
 
+// Reading the records of a stack the target never had, as a plan does
+// before the first apply, finds none and makes nothing there: no volume,
+// no container.
+func TestRecords_readingANewStackMakesNothing(t *testing.T) {
+	b := newBench(t, "compose")
+	read, err := volume.Open(t.Context(), b.api, b.stack, nil, false)
+	require.NoError(t, err)
+	installations, err := read.ListInstallations(t.Context(), b.stack)
+	require.NoError(t, err)
+	assert.Empty(t, installations)
+	assert.Empty(t, read.Owner())
+	require.NoError(t, read.Close(t.Context()))
+
+	_, err = b.api.VolumeInspect(t.Context(), volume.Name(b.stack), client.VolumeInspectOptions{})
+	assert.Error(t, err, "no volume")
+	containers, err := b.api.ContainerList(t.Context(), client.ContainerListOptions{All: true, Filters: client.Filters{}.Add("label", volume.Label+"="+b.stack)})
+	require.NoError(t, err)
+	assert.Empty(t, containers.Items, "no container")
+}
+
 // sharedRecords is a records type on a directory of the Docker's host, which
 // nemo provisions: as an NFS export is for the managers of a swarm.
 func sharedRecords(t *testing.T, b *bench) map[string]target.VolumeType {
