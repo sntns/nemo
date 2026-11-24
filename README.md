@@ -158,7 +158,7 @@ Each one is described in [use cases](docs/use-cases.md).
 
 ## Terraform and OpenTofu
 
-The [nemo provider](https://github.com/sntns/terraform-provider-nemo), `sntns/nemo` on the [Terraform Registry](https://registry.terraform.io/providers/sntns/nemo) and the [OpenTofu Registry](https://search.opentofu.org/provider/sntns/nemo), deploys a stack from Terraform or OpenTofu: a `nemo_stack` is its manifest, and each apply is a `nemo up`.
+The [nemo provider](https://github.com/sntns/terraform-provider-nemo), `sntns/nemo` on the [Terraform Registry](https://registry.terraform.io/providers/sntns/nemo) and the [OpenTofu Registry](https://search.opentofu.org/provider/sntns/nemo), deploys a stack from Terraform or OpenTofu: a `nemo_stack` is its manifest, and each apply is a `nemo up`. Each plan works out, as `nemo up` plans before it acts, the networks, volumes, configs and secrets the stack will have: the plan shows those the apply adds or removes.
 
 ```hcl
 resource "nemo_stack" "shop" {
