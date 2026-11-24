@@ -53,12 +53,29 @@ jobs:
   govulncheck:
     name: Vulnerabilities
     runs-on: ubuntu-latest
+    env:
+      # Space-separated, each with why. GO-2026-6941: github.com/qri-io/jsonschema, which cnab-go validates a bundle's
+      # parameters with, has no fixed version, cnab-go's latest included. Remove it once one exists.
+      IGNORED: GO-2026-6941
     steps:
-      - uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Empty, or the action's default "stable" wins over go.mod, and the scan misses the standard library the release is built with.
-          go-version-input: ""
+          persist-credentials: false
+      # The Go of go.mod, so that the scan covers the standard library the release is built with.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
           go-version-file: go.mod
+      - name: Fail on a vulnerability the code reaches, but those ignored
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./... || true
+          go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 -format json ./... > govulncheck.json
+          reached=$(jq -r 'select(.finding.trace[0].function) | .finding.osv' govulncheck.json | sort -u)
+          left=$(comm -23 <(echo "$reached") <(tr ' ' '\n' <<< "$IGNORED" | sort -u) | sed '/^$/d')
+          if [ -n "$left" ]; then
+            echo "::error::the code reaches $(echo $left)"
+            exit 1
+          fi
+          echo "the code reaches no vulnerability but those ignored: $IGNORED"
 
   workflows:
     name: Workflows
